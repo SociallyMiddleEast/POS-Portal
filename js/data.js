@@ -4,14 +4,14 @@
 // the UI only talks to Store, so nothing else needs to change.
 // ------------------------------------------------------------------
 
-const STORE_KEY = 'pos-portal-data-v2';
+const STORE_KEY = 'pos-portal-data-v3';
 const VAT_RATE = 0.11; // Lebanon VAT
 
 const PRODUCTS = [
-  { sku: 'LIC-STD', name: 'POS License — Standard (per terminal / yr)', category: 'License', price: 360 },
-  { sku: 'LIC-PRO', name: 'POS License — Pro (per terminal / yr)', category: 'License', price: 540 },
-  { sku: 'LIC-HTL', name: 'Hotel PMS Interface (per property / yr)', category: 'License', price: 1200 },
-  { sku: 'LIC-KDS', name: 'Kitchen Display License (per screen / yr)', category: 'License', price: 180 },
+  { sku: 'LIC-STD', name: 'POS License — Standard (per terminal)', category: 'License', price: 360 },
+  { sku: 'LIC-PRO', name: 'POS License — Pro (per terminal)', category: 'License', price: 540 },
+  { sku: 'LIC-HTL', name: 'Hotel PMS Interface (per property)', category: 'License', price: 1200 },
+  { sku: 'LIC-KDS', name: 'Kitchen Display License (per screen)', category: 'License', price: 180 },
   { sku: 'HW-TERM', name: 'Touch POS Terminal 15.6"', category: 'Hardware', price: 890 },
   { sku: 'HW-HAND', name: 'Handheld Waiter Device', category: 'Hardware', price: 420 },
   { sku: 'HW-PRNT', name: 'Thermal Receipt Printer', category: 'Hardware', price: 210 },
@@ -23,6 +23,43 @@ const PRODUCTS = [
   { sku: 'SRV-MENU', name: 'Menu Build & Import', category: 'Service', price: 200 },
   { sku: 'SRV-SUP', name: 'Premium Support (per year)', category: 'Service', price: 600 }
 ];
+
+// ---------- Licensing ----------
+// License products: `price` is the yearly subscription price.
+// Monthly = yearly / 12 + 15%.  Perpetual = 3 × yearly (one-time).
+const LICENSE_MODELS = ['Subscription', 'Perpetual'];
+const BILLING_PERIODS = ['Yearly', 'Monthly'];
+const isLicense = sku => sku.startsWith('LIC');
+function licensePrice(p, model, billing) {
+  if (p.category !== 'License') return p.price;
+  if (model === 'Perpetual') return p.price * 3;
+  return billing === 'Monthly' ? Math.round(p.price / 12 * 1.15) : p.price;
+}
+function licenseSuffix(model, billing) {
+  return model === 'Perpetual' ? 'one-time' : billing === 'Monthly' ? '/ month' : '/ year';
+}
+const isoLocal = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+function addPeriod(dateStr, billing) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (billing === 'Monthly') d.setMonth(d.getMonth() + 1); else d.setFullYear(d.getFullYear() + 1);
+  return isoLocal(d);
+}
+function newToken() {
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let t = '';
+  const rnd = (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(new Uint32Array(14)) : Array.from({ length: 14 }, () => Math.random() * 1e9);
+  for (let i = 0; i < 14; i++) t += abc[rnd[i] % abc.length];
+  return t;
+}
+// Access state of a customer's POS: Active | Expired | Revoked | Suspended | None
+function accessStatus(c) {
+  const a = c && c.access;
+  if (!a) return 'None';
+  if (a.revoked) return 'Revoked';
+  if (c.status === 'Suspended') return 'Suspended';
+  if (a.model === 'Subscription' && a.end && a.end < isoLocal(new Date())) return 'Expired';
+  return 'Active';
+}
 
 function seedData() {
   // Deterministic pseudo-random so the demo looks the same for everyone
@@ -70,7 +107,7 @@ function seedData() {
   });
 
   const orders = [];
-  const statuses = ['Invoiced', 'Invoiced', 'Delivered', 'Confirmed', 'Invoiced'];
+  const statuses = ['Paid', 'Paid', 'Paid', 'Paid', 'Invoiced'];
   let on = 1;
   for (let m = 9; m >= 0; m--) {
     const count = 2 + Math.floor(rnd() * 3) + (9 - m > 5 ? 1 : 0);
@@ -87,13 +124,19 @@ function seedData() {
         used.add(p.sku);
         lines.push({ sku: p.sku, name: p.name, qty: 1 + Math.floor(rnd() * (p.category === 'Service' ? 2 : 4)), price: p.price, discount: rnd() > 0.7 ? 10 : 0 });
       }
-      let status = m === 0 ? pick(['Draft', 'Confirmed', 'Confirmed', 'Delivered']) : m === 1 ? pick(['Confirmed', 'Delivered', 'Invoiced']) : pick(statuses);
+      if (!lines.some(l => isLicense(l.sku))) { const lp = pick(PRODUCTS.filter(x => x.category === 'License')); lines.unshift({ sku: lp.sku, name: lp.name, qty: 1 + Math.floor(rnd() * 3), price: lp.price, discount: 0 }); }
+      const model = rnd() > 0.7 ? 'Perpetual' : 'Subscription';
+      const billing = rnd() > 0.8 ? 'Monthly' : 'Yearly';
+      lines.forEach(l => { const pr = PRODUCTS.find(x => x.sku === l.sku); l.price = licensePrice(pr, model, billing); });
+      let status = m === 0 ? pick(['Draft', 'Confirmed', 'Confirmed', 'Delivered', 'Invoiced']) : m === 1 ? pick(['Delivered', 'Invoiced', 'Paid']) : pick(statuses);
       orders.push({
         id: `SO-${d.getFullYear()}-${String(on++).padStart(4, '0')}`,
         customerId: c.id,
         date: new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10),
         status,
         lines,
+        license: { model, billing },
+        payment: status === 'Paid' ? { date: isoLocal(new Date(d.getTime() + 864e6)), method: pick(['Bank transfer', 'Cash', 'Cheque', 'Card']), reference: '' } : null,
         notes: ''
       });
     }
@@ -108,6 +151,25 @@ function seedData() {
     devices.push({ customerId: c.id, type: 'Receipt Printer', serial: `PR-${c.id.slice(1)}${Math.floor(rnd() * 9000 + 1000)}`, location: 'Front Counter', status: c.status === 'Suspended' ? 'Offline' : 'Online' });
     if (c.type !== 'Café' && c.type !== 'Bakery') devices.push({ customerId: c.id, type: 'Kitchen Display', serial: `KD-${c.id.slice(1)}${Math.floor(rnd() * 9000 + 1000)}`, location: 'Kitchen', status: c.status === 'Suspended' ? 'Offline' : 'Online' });
   });
+
+  // Onboarding customers haven't paid yet → no access (shows the "record payment" flow)
+  orders.forEach(o => { const c = customers.find(x => x.id === o.customerId); if (c.status === 'Onboarding' && o.status === 'Paid') { o.status = 'Invoiced'; o.payment = null; } });
+  // Access: from each customer's latest paid order
+  customers.forEach(c => {
+    const paid = orders.filter(o => o.customerId === c.id && o.status === 'Paid').sort((a, b) => b.payment.date.localeCompare(a.payment.date))[0];
+    if (!paid) return;
+    const { model, billing } = paid.license;
+    const start = paid.payment.date;
+    c.access = { token: newToken(), orderId: paid.id, model, billing: model === 'Perpetual' ? null : billing, start, end: model === 'Perpetual' ? null : addPeriod(start, billing), revoked: false };
+  });
+  // One lapsed monthly subscription, to show the "expired" state
+  const lapsed = customers.find(c => c.id === 'C005');
+  if (lapsed && lapsed.access) {
+    const paid = orders.find(o => o.id === lapsed.access.orderId);
+    paid.license = { model: 'Subscription', billing: 'Monthly' };
+    paid.lines.forEach(l => { const pr = PRODUCTS.find(x => x.sku === l.sku); l.price = licensePrice(pr, 'Subscription', 'Monthly'); });
+    Object.assign(lapsed.access, { model: 'Subscription', billing: 'Monthly', end: addPeriod(lapsed.access.start, 'Monthly') });
+  }
 
   const notes = customers.map((c, i) => ({ customerId: c.id, date: new Date(now.getTime() - (i + 1) * 86400000 * 3).toISOString().slice(0, 10), text: pick(['Requested quote for an extra handheld for the terrace.', 'Menu updated for the new season.', 'Follow-up call about license renewal.', 'Reported printer paper jam — resolved remotely.', 'Interested in KDS for the second kitchen.', 'Training session scheduled for new staff.']) }));
 
@@ -156,6 +218,10 @@ const Store = {
     this.data.orders.push(o); this.save(); return o;
   },
   updateOrder(id, patch) { Object.assign(this.order(id), patch); this.save(); },
+
+  setAccess(customerId, access) { const c = this.customer(customerId); c.access = access; this.save(); return access; },
+  revokeAccess(customerId) { const c = this.customer(customerId); if (c.access) { c.access.revoked = true; this.save(); } },
+  regenerateAccess(customerId) { const c = this.customer(customerId); if (c.access) { c.access.token = newToken(); c.access.revoked = false; this.save(); } return c.access; },
 
   devices(customerId) { return this.data.devices.filter(d => d.customerId === customerId); },
   notes(customerId) { return this.data.notes.filter(n => n.customerId === customerId).sort((a, b) => b.date.localeCompare(a.date)); },

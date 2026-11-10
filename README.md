@@ -6,6 +6,21 @@ Plain HTML + CSS + JavaScript. No build step, no backend, no database yet — da
 
 **Demo login:** `admin` / `admin123` (or use “Create Account” — also stored locally).
 
+## Licensing, payment & customer access
+
+1. When you create a sale order, choose the **license model**:
+   - **Subscription**, billed **Yearly** or **Monthly** (monthly costs 15% more than yearly)
+   - **Perpetual**, a one-time payment (3× the yearly price) with no expiry
+2. Order flow: Draft → Confirmed → Delivered → Invoiced → **Paid**.
+   Click **Record payment** to enter the date, method and reference. You can still change the license model there.
+3. Recording the payment activates the customer's POS access and opens the **access link** panel. From there you can copy the link, open it, send it by WhatsApp or email, create a new link (the old one stops working), or revoke access.
+   You can open the panel again at any time from the customer page (**Access link**).
+4. The link opens `client.html`, a separate POS for that business: a menu for its type (restaurant, café, bar, bakery or hotel), an order ticket, table or room number, cash/card/room-charge payment, a receipt, and "Sales today". It has no link back to the portal.
+   - When a subscription expires, the register locks.
+   - Revoking access or creating a new link locks the old link (for now this only works in the same browser; see below).
+
+> For now the link carries the business and license info inside the URL (`#…`), so it works on any device without a database. With a backend, the link should carry only the random token, and `client.html` should check it with the server. That also makes revoking access work everywhere.
+
 ## Run locally
 
 ```bash
@@ -35,7 +50,10 @@ index.html        entry page
 css/styles.css    glass theme
 js/icons.js       inline SVG icons
 js/data.js        mock data + Store (the only data layer)
-js/app.js         router, views, auth (UI only)
+js/app.js         portal: router, views, auth (UI only)
+client.html       customer POS (opened from the access link)
+js/client.js      customer POS logic + menus per business type
+css/client.css    customer POS styles
 assets/bg.svg     background
 ```
 

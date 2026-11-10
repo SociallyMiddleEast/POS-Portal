@@ -21,14 +21,15 @@ const avatar = (name, key, cls = '') => `<div class="avatar ${cls}" style="${gra
 
 const STATUS_COLORS = {
   Active: 'green', Onboarding: 'blue', Suspended: 'red',
-  Draft: 'gray', Confirmed: 'blue', Delivered: 'violet', Invoiced: 'green', Cancelled: 'red',
-  Online: 'green', Offline: 'red'
+  Draft: 'gray', Confirmed: 'blue', Delivered: 'violet', Invoiced: 'amber', Paid: 'green', Cancelled: 'red',
+  Online: 'green', Offline: 'red', Expired: 'amber', Revoked: 'red', None: 'gray',
+  Subscription: 'blue', Perpetual: 'violet'
 };
 const pill = s => `<span class="pill ${STATUS_COLORS[s] || 'gray'}">${esc(s)}</span>`;
 const TYPE_ICON = { Restaurant: 'store', Hotel: 'hotel', Café: 'store', Bar: 'store', Bakery: 'store' };
 const BUSINESS_TYPES = ['Restaurant', 'Hotel', 'Café', 'Bar', 'Bakery'];
-const ORDER_FLOW = ['Draft', 'Confirmed', 'Delivered', 'Invoiced'];
-const OPEN_STATUSES = ['Draft', 'Confirmed', 'Delivered'];
+const ORDER_FLOW = ['Draft', 'Confirmed', 'Delivered', 'Invoiced', 'Paid'];
+const OPEN_STATUSES = ['Draft', 'Confirmed', 'Delivered', 'Invoiced'];
 const countsToward = o => o.status !== 'Draft' && o.status !== 'Cancelled';
 
 function toast(msg) {
@@ -56,6 +57,74 @@ function customerStats(id) {
   const orders = Store.orders(id);
   const revenue = orders.filter(countsToward).reduce((s, o) => s + orderTotals(o).total, 0);
   return { orders: orders.length, revenue, open: orders.filter(o => OPEN_STATUSES.includes(o.status)).length, last: orders[0]?.date };
+}
+
+// ---------- customer POS access link ----------
+// For now the link carries the customer's license info (base64 in the #hash) so it works
+// on any device without a database. With a backend, the link only needs the token.
+function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function accessLink(c) {
+  const a = c.access;
+  const payload = { v: 1, k: a.token, i: c.id, n: c.name, t: c.type, c: c.city, o: c.outlets, m: a.model, b: a.billing, s: a.start, e: a.end };
+  const base = new URL('client.html', location.href).href.split('#')[0];
+  return base + '#' + b64url(JSON.stringify(payload));
+}
+function licenseLabel(a) {
+  if (!a) return '—';
+  return a.model === 'Perpetual' ? 'Perpetual license' : `${a.billing} subscription`;
+}
+function validityLabel(a) {
+  if (!a) return '—';
+  if (a.model === 'Perpetual') return 'No expiry';
+  return (a.end < localToday() ? 'Expired ' : 'Valid until ') + fmtDate(a.end);
+}
+
+function openAccessModal(customerId) {
+  const c = Store.customer(customerId);
+  const st = accessStatus(c);
+  if (st === 'None') {
+    const unpaid = Store.orders(c.id).find(o => ['Confirmed', 'Delivered', 'Invoiced'].includes(o.status));
+    return modal(`<h2>No POS access yet</h2><div class="card-sub">${esc(c.name)} gets a POS access link once one of their sale orders is paid.</div>
+      <div class="modal-actions"><button class="btn" data-close>Close</button>${unpaid ? `<a class="btn btn-primary" href="#/orders/${unpaid.id}" data-close>${icon('dollar', 16)}Record payment on ${unpaid.id}</a>` : `<a class="btn btn-primary" href="#/orders/new?customer=${c.id}" data-close>${icon('plus', 16)}New sale order</a>`}</div>`);
+  }
+  const a = c.access;
+  const link = accessLink(c);
+  const msg = `Hello ${c.name}, here is your Technica POS access link: ${link}`;
+  modal(`
+    <h2>POS access link</h2>
+    <div class="card-sub">Private link to ${esc(c.name)}'s own POS. It doesn't give access to this portal.</div>
+    <div class="access-box">
+      <div class="access-row"><span>Status</span>${pill(st)}</div>
+      <div class="access-row"><span>License</span><b>${licenseLabel(a)}</b></div>
+      <div class="access-row"><span>Validity</span><b>${validityLabel(a)}</b></div>
+      <div class="access-row"><span>From order</span><a class="mono" href="#/orders/${a.orderId}" data-close>${esc(a.orderId)}</a></div>
+    </div>
+    ${st === 'Active' ? '' : `<div class="notice">${st === 'Expired' ? 'The subscription has expired. The customer sees a locked screen until you record a renewal payment.' : st === 'Revoked' ? 'Access is revoked. The link shows a locked screen until you restore it.' : 'This customer is suspended, so their POS is locked.'}</div>`}
+    <div class="field" style="margin-top:16px"><label>Access link</label>
+      <div class="link-field"><input class="input" id="acc-link" readonly value="${esc(link)}" /><button class="btn btn-primary" id="acc-copy">${icon('copy', 15)}Copy</button></div>
+    </div>
+    <div class="share-row">
+      <a class="btn btn-sm" href="${esc(link)}" target="_blank" rel="noopener">${icon('external', 14)}Open POS</a>
+      <a class="btn btn-sm" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">${icon('phone', 14)}WhatsApp</a>
+      <a class="btn btn-sm" href="mailto:${esc(c.email || '')}?subject=${encodeURIComponent('Your Technica POS access')}&body=${encodeURIComponent(msg)}">${icon('mail', 14)}Email</a>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-ghost" id="acc-regen" title="Old link stops working">${icon('refresh', 14)}New link</button>
+        ${a.revoked ? `<button class="btn btn-sm btn-ghost" id="acc-restore">${icon('check', 14)}Restore access</button>` : `<button class="btn btn-sm btn-ghost btn-danger" id="acc-revoke">${icon('x', 14)}Revoke</button>`}
+      </div>
+      <button class="btn" data-close>Done</button>
+    </div>`, (m, close) => {
+    $('#acc-copy', m).onclick = async () => {
+      const inp = $('#acc-link', m);
+      try { await navigator.clipboard.writeText(inp.value); } catch (e) { inp.select(); try { document.execCommand('copy'); } catch (e2) {} }
+      toast('Link copied');
+    };
+    $('#acc-link', m).onfocus = e => e.target.select();
+    const regen = $('#acc-regen', m); regen.onclick = () => { Store.regenerateAccess(c.id); toast('New link created. The old one no longer works'); openAccessModal(c.id); };
+    const rv = $('#acc-revoke', m); if (rv) rv.onclick = () => { Store.revokeAccess(c.id); toast('Access revoked'); close(); render(); };
+    const rs = $('#acc-restore', m); if (rs) rs.onclick = () => { c.access.revoked = false; Store.save(); toast('Access restored'); render(); openAccessModal(c.id); };
+  });
 }
 
 // ---------- auth (UI only — replace with real auth when the backend exists) ----------
@@ -260,7 +329,7 @@ function viewOverview() {
   const change = (v, label = 'vs last month') => `<div class="stat-change ${v < 0 ? 'down' : ''}">${icon('arrowUpRight', 14)}${v >= 0 ? '+' : ''}${v}%<span>${label}</span></div>`;
   const stats = [
     { label: 'Active customers', value: active, icon: 'store', foot: `<div class="stat-change" style="color:var(--blue)">${customers.filter(c => c.status === 'Onboarding').length} onboarding</div>` },
-    { label: 'Open sale orders', value: open, icon: 'receipt', foot: `<div class="stat-change" style="color:var(--amber)">${(n => n + (n === 1 ? ' draft' : ' drafts'))(orders.filter(o => o.status === 'Draft').length)} to confirm</div>` },
+    { label: 'Open sale orders', value: open, icon: 'receipt', foot: `<div class="stat-change" style="color:var(--amber)">${orders.filter(o => o.status === 'Invoiced').length} awaiting payment</div>` },
     { label: 'Revenue this month', value: money(cur.revenue), icon: 'dollar', foot: change(pct(cur.revenue, prev.revenue)) },
     { label: 'Avg. order value', value: money(avg), icon: 'bag', foot: `<div class="stat-change" style="color:var(--muted)">${counted.length} orders, incl. VAT</div>` }
   ];
@@ -418,16 +487,16 @@ function viewCustomers() {
           const s = customerStats(c.id);
           return `<a class="glass cust-card" href="#/customers/${c.id}">
             <div class="top">${avatar(c.name, c.id)}<div><b>${esc(c.name)}</b><span>${esc(c.type)} · ${esc(c.city)}</span></div>${pill(c.status)}</div>
-            <div class="meta"><div><span>Orders</span><b>${s.orders}</b></div><div><span>Revenue</span><b>${money(s.revenue / 1000, 1)}k</b></div><div><span>Plan</span><b>${esc(c.plan)}</b></div></div>
+            <div class="meta"><div><span>Orders</span><b>${s.orders}</b></div><div><span>Revenue</span><b>${money(s.revenue / 1000, 1)}k</b></div><div><span>License</span><b>${c.access ? (c.access.model === 'Perpetual' ? 'Perpetual' : c.access.billing) : '—'}</b></div></div>
           </a>`;
         }).join('')}</div>`;
       } else {
         box.innerHTML = `<div class="glass card"><div class="table-wrap"><table>
-          <thead><tr><th>Customer</th><th>Type</th><th>City</th><th>Plan</th><th>Status</th><th class="num">Open orders</th><th class="num">Revenue</th></tr></thead>
+          <thead><tr><th>Customer</th><th>Type</th><th>City</th><th>Plan</th><th>Status</th><th>POS access</th><th class="num">Open orders</th><th class="num">Revenue</th></tr></thead>
           <tbody>${list.map(c => { const s = customerStats(c.id); return `
             <tr class="clickable" data-href="#/customers/${c.id}">
               <td><div class="cell-main">${avatar(c.name, c.id)}<div><b>${esc(c.name)}</b><small>${esc(c.email)}</small></div></div></td>
-              <td><span class="tag">${esc(c.type)}</span></td><td class="muted">${esc(c.city)}</td><td>${esc(c.plan)}</td><td>${pill(c.status)}</td>
+              <td><span class="tag">${esc(c.type)}</span></td><td class="muted">${esc(c.city)}</td><td>${esc(c.plan)}</td><td>${pill(c.status)}</td><td>${c.access ? `<span class="tag">${c.access.model === 'Perpetual' ? 'Perpetual' : c.access.billing}</span> ` : ''}${accessStatus(c) === 'Active' ? '' : pill(accessStatus(c))}</td>
               <td class="num">${s.open}</td><td class="num"><b>${money(s.revenue)}</b></td></tr>`; }).join('')}</tbody>
         </table></div></div>`;
         bindRowLinks();
@@ -487,6 +556,7 @@ function viewCustomer(id) {
       </div>
       <div class="page-actions">
         <a class="btn" href="mailto:${esc(c.email)}">${icon('mail', 16)}Email</a>
+        <button class="btn" id="hero-access">${icon('link', 16)}Access link</button>
         <a class="btn btn-primary" href="#/orders/new?customer=${c.id}">${icon('plus', 16)}New sale order</a>
       </div>
     </div>
@@ -503,6 +573,7 @@ function viewCustomer(id) {
     </div>
     <div id="tab-body"></div>
   `, () => {
+    $('#hero-access').onclick = () => openAccessModal(c.id);
     const body = $('#tab-body');
     const drawTab = () => { body.innerHTML = customerTab(c, custTab.tab); bindRowLinks(); bindCustomerTab(c); };
     $$('#cust-tabs button').forEach(b => b.onclick = () => { custTab.tab = b.dataset.k; $$('#cust-tabs button').forEach(x => x.classList.toggle('active', x === b)); drawTab(); });
@@ -544,7 +615,16 @@ function customerTab(c, tab) {
   const orders = Store.orders(c.id);
   if (tab === 'overview') {
     const notes = Store.notes(c.id).slice(0, 3);
-    return `<div class="grid row-1-1" style="margin-bottom:18px">
+    const st = accessStatus(c), a = c.access;
+    const accessCard = `<div class="glass card access-card" style="margin-bottom:18px">
+      <div class="access-card-main">
+        <div class="stat-icon" style="width:44px;height:44px">${icon('monitor', 20)}</div>
+        <div><div class="card-title" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">Customer POS access ${pill(st)}</div>
+          <div class="card-sub">${st === 'None' ? 'Not active yet. Record a payment on a sale order to activate it.' : `${licenseLabel(a)} · ${validityLabel(a)} · from ${esc(a.orderId)}`}</div></div>
+      </div>
+      <button class="btn ${st === 'Active' ? 'btn-primary' : ''}" data-access>${icon('link', 16)}${st === 'None' ? 'Set up access' : 'Share access link'}</button>
+    </div>`;
+    return accessCard + `<div class="grid row-1-1" style="margin-bottom:18px">
       <div class="glass card"><div class="card-head"><div class="card-title">Account details</div></div>
         <div class="info-list">
           <div><span>Customer ID</span><b class="mono">${c.id}</b></div>
@@ -571,16 +651,16 @@ function customerTab(c, tab) {
     // licenses = license lines from non-cancelled, non-draft orders
     const lic = {};
     orders.filter(countsToward).forEach(o => o.lines.filter(l => l.sku.startsWith('LIC')).forEach(l => { lic[l.sku] = lic[l.sku] || { name: l.name, qty: 0, last: o.date }; lic[l.sku].qty += Number(l.qty); if (o.date > lic[l.sku].last) lic[l.sku].last = o.date; }));
-    const renew = d => { const x = new Date(d + 'T00:00:00'); x.setFullYear(x.getFullYear() + 1); return x.toISOString().slice(0, 10); };
+    const renew = () => c.access && c.access.model === 'Subscription' ? c.access.end : null;
     const devIcon = { 'POS Terminal': 'monitor', 'Receipt Printer': 'printer', 'Kitchen Display': 'monitor' };
     return `<div class="grid row-1-1">
       <div class="glass card"><div class="card-head"><div><div class="card-title">Devices</div><div class="card-sub">${devices.length} registered</div></div></div>
         <div class="table-wrap"><table style="min-width:480px"><thead><tr><th>Device</th><th>Location</th><th>Status</th></tr></thead><tbody>
         ${devices.map(d => `<tr><td><div class="cell-main"><div class="feed-icon">${icon(devIcon[d.type] || 'monitor', 15)}</div><div><b>${esc(d.type)}</b><small class="mono">${esc(d.serial)}</small></div></div></td><td class="muted">${esc(d.location)}</td><td>${pill(d.status)}</td></tr>`).join('')}
         </tbody></table></div></div>
-      <div class="glass card"><div class="card-head"><div><div class="card-title">Licenses</div><div class="card-sub">From confirmed sale orders</div></div></div>
+      <div class="glass card"><div class="card-head"><div><div class="card-title">Licenses</div><div class="card-sub">${c.access ? `${licenseLabel(c.access)} · ${validityLabel(c.access)}` : 'From confirmed sale orders'}</div></div>${c.access ? pill(accessStatus(c)) : ''}</div>
         ${Object.keys(lic).length ? `<div class="table-wrap"><table style="min-width:440px"><thead><tr><th>License</th><th class="num">Qty</th><th>Renews</th></tr></thead><tbody>
-        ${Object.values(lic).map(l => { const r = renew(l.last); const soon = (new Date(r) - new Date()) / 864e5 < 60; return `<tr><td><div class="cell-main"><div class="feed-icon">${icon('key', 15)}</div><b style="font-weight:500">${esc(l.name)}</b></div></td><td class="num">${l.qty}</td><td>${soon ? `<span class="pill amber">${fmtDate(r)}</span>` : `<span class="muted">${fmtDate(r)}</span>`}</td></tr>`; }).join('')}
+        ${Object.values(lic).map(l => { const r = renew(); const soon = r && (new Date(r) - new Date()) / 864e5 < 60; return `<tr><td><div class="cell-main"><div class="feed-icon">${icon('key', 15)}</div><b style="font-weight:500">${esc(l.name)}</b></div></td><td class="num">${l.qty}</td><td>${!r ? `<span class="muted">${c.access ? 'Perpetual' : '—'}</span>` : soon ? `<span class="pill amber">${fmtDate(r)}</span>` : `<span class="muted">${fmtDate(r)}</span>`}</td></tr>`; }).join('')}
         </tbody></table></div>` : '<div class="empty">No licenses sold yet.</div>'}</div>
     </div>`;
   }
@@ -594,6 +674,7 @@ function customerTab(c, tab) {
 }
 
 function bindCustomerTab(c) {
+  $$('[data-access]').forEach(b => b.onclick = () => openAccessModal(c.id));
   $$('[data-goto]').forEach(b => b.onclick = () => $(`#cust-tabs button[data-k="${b.dataset.goto}"]`).click());
   const add = $('#add-contact'); if (add) add.onclick = () => openContactModal(c.id);
   bindContactDelete();
@@ -671,9 +752,10 @@ function viewOrderNew() {
   const customers = Store.customers().filter(c => c.status !== 'Suspended');
   const today = localToday();
   const lines = [{ sku: '', qty: 1, price: 0, discount: 0 }];
+  const lic = { model: 'Subscription', billing: 'Yearly' };
 
   const productOptions = sel => `<option value="">Select product…</option>` + ['License', 'Hardware', 'Service'].map(cat =>
-    `<optgroup label="${cat}">${PRODUCTS.filter(p => p.category === cat).map(p => `<option value="${p.sku}" ${p.sku === sel ? 'selected' : ''}>${esc(p.name)} — ${money(p.price)}</option>`).join('')}</optgroup>`).join('');
+    `<optgroup label="${cat}">${PRODUCTS.filter(p => p.category === cat).map(p => `<option value="${p.sku}" ${p.sku === sel ? 'selected' : ''}>${esc(p.name)} — ${money(licensePrice(p, lic.model, lic.billing))}${p.category === 'License' ? ' ' + licenseSuffix(lic.model, lic.billing) : ''}</option>`).join('')}</optgroup>`).join('');
 
   shell('/orders', `
     <a href="#/orders" class="crumb">${icon('arrowLeft', 14)}Sale orders</a>
@@ -689,6 +771,14 @@ function viewOrderNew() {
           </div>
         </div>
         <div class="glass card">
+          <div class="card-head"><div><div class="card-title">Licensing</div><div class="card-sub">How the customer pays for the POS software</div></div></div>
+          <div class="lic-grid">
+            <div class="field"><label>License model</label><div class="seg" id="so-model">${LICENSE_MODELS.map(m => `<button type="button" data-m="${m}" class="${m === lic.model ? 'active' : ''}">${m}</button>`).join('')}</div></div>
+            <div class="field" id="billing-field"><label>Billing period</label><div class="seg" id="so-billing">${BILLING_PERIODS.map(b => `<button type="button" data-b="${b}" class="${b === lic.billing ? 'active' : ''}">${b}</button>`).join('')}</div></div>
+          </div>
+          <div class="lic-hint" id="lic-hint"></div>
+        </div>
+        <div class="glass card">
           <div class="card-head"><div><div class="card-title">Order lines</div><div class="card-sub">Licenses, hardware and services</div></div><button class="btn btn-sm" id="add-line">${icon('plus', 14)}Add line</button></div>
           <div class="table-wrap"><table class="lines-table" style="min-width:720px">
             <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Disc. %</th><th class="num">Amount</th><th></th></tr></thead>
@@ -700,6 +790,7 @@ function viewOrderNew() {
       <div class="glass card summary">
         <div class="card-head"><div class="card-title">Summary</div></div>
         <div id="so-cust-mini"></div>
+        <div id="so-lic-mini"></div>
         <div id="so-sum"></div>
         <button class="btn btn-primary" id="so-confirm">${icon('check', 16)}Confirm order</button>
         <button class="btn" id="so-draft">Save as draft</button>
@@ -712,7 +803,7 @@ function viewOrderNew() {
       tbody.innerHTML = lines.map((l, i) => `<tr>
         <td><select class="input" data-i="${i}" data-f="sku">${productOptions(l.sku)}</select></td>
         <td class="num"><input class="input" type="number" min="1" step="1" value="${l.qty}" data-i="${i}" data-f="qty" /></td>
-        <td class="num"><input class="input" type="number" min="0" step="1" value="${l.price}" data-i="${i}" data-f="price" style="width:100px" /></td>
+        <td class="num"><input class="input" type="number" min="0" step="1" value="${l.price}" data-i="${i}" data-f="price" style="width:100px" />${l.sku && isLicense(l.sku) ? `<div class="unit-suffix">${licenseSuffix(lic.model, lic.billing)}</div>` : ''}</td>
         <td class="num"><input class="input" type="number" min="0" max="100" step="1" value="${l.discount}" data-i="${i}" data-f="discount" style="width:72px" /></td>
         <td class="num" data-amt="${i}"><b>${money(l.qty * l.price * (1 - l.discount / 100), 2)}</b></td>
         <td class="num"><button class="btn btn-sm btn-icon btn-ghost btn-danger" data-rm="${i}" title="Remove line" ${lines.length === 1 ? 'disabled style="opacity:.3"' : ''}>${icon('trash', 14)}</button></td></tr>`).join('');
@@ -720,7 +811,7 @@ function viewOrderNew() {
         const ev = inp.tagName === 'SELECT' ? 'onchange' : 'oninput';
         inp[ev] = () => {
           const l = lines[+inp.dataset.i], f = inp.dataset.f;
-          if (f === 'sku') { const p = PRODUCTS.find(x => x.sku === inp.value); l.sku = inp.value; l.price = p ? p.price : 0; drawLines(); }
+          if (f === 'sku') { const p = PRODUCTS.find(x => x.sku === inp.value); l.sku = inp.value; l.price = p ? licensePrice(p, lic.model, lic.billing) : 0; drawLines(); }
           else { l[f] = Math.max(0, Number(inp.value) || 0); if (f === 'discount') l[f] = Math.min(l[f], 100); $(`[data-amt="${inp.dataset.i}"]`).innerHTML = `<b>${money(l.qty * l.price * (1 - l.discount / 100), 2)}</b>`; }
           drawSum();
         };
@@ -737,9 +828,22 @@ function viewOrderNew() {
     };
     const drawCust = () => {
       const c = Store.customer($('#so-cust').value);
+      $('#so-lic-mini').innerHTML = `<div class="summary-row"><span>License</span><b>${pill(lic.model)}${lic.model === 'Subscription' ? ` <span class="muted" style="font-size:12px">${lic.billing}</span>` : ''}</b></div>`;
       $('#so-cust-mini').innerHTML = c ? `<div class="cust-mini">${avatar(c.name, c.id)}<div><b>${esc(c.name)}</b><span>${esc(c.type)} · ${esc(c.city)} · ${esc(c.plan)}</span></div></div>` : `<div class="cust-mini"><div class="avatar" style="background:rgba(255,255,255,.08)">${icon('store', 16)}</div><div><b>No customer yet</b><span>Choose one on the left</span></div></div>`;
     };
     $('#so-cust').onchange = drawCust;
+    const drawLic = () => {
+      $$('#so-model button').forEach(b => b.classList.toggle('active', b.dataset.m === lic.model));
+      $$('#so-billing button').forEach(b => b.classList.toggle('active', b.dataset.b === lic.billing));
+      $('#billing-field').style.display = lic.model === 'Perpetual' ? 'none' : '';
+      $('#lic-hint').innerHTML = lic.model === 'Perpetual'
+        ? `${icon('key', 14)}One-time payment (3× the yearly price). The customer owns the license and their POS never expires.`
+        : `${icon('refresh', 14)}Recurring. Access runs for 1 ${lic.billing === 'Monthly' ? 'month' : 'year'} from the payment date${lic.billing === 'Monthly' ? '. Monthly costs 15% more than yearly' : ''}.`;
+      lines.forEach(l => { const p = PRODUCTS.find(x => x.sku === l.sku); if (p && p.category === 'License') l.price = licensePrice(p, lic.model, lic.billing); });
+      drawLines(); drawSum(); drawCust();
+    };
+    $$('#so-model button').forEach(b => b.onclick = () => { lic.model = b.dataset.m; drawLic(); });
+    $$('#so-billing button').forEach(b => b.onclick = () => { lic.billing = b.dataset.b; drawLic(); });
     $('#add-line').onclick = () => { lines.push({ sku: '', qty: 1, price: 0, discount: 0 }); drawLines(); };
     const save = status => {
       const customerId = $('#so-cust').value;
@@ -749,6 +853,7 @@ function viewOrderNew() {
       const o = Store.addOrder({
         customerId, date: $('#so-date').value || today, status,
         terms: $('#so-terms').value, notes: $('#so-notes').value.trim(),
+        license: { model: lic.model, billing: lic.billing }, payment: null,
         lines: valid.map(l => ({ sku: l.sku, name: PRODUCTS.find(p => p.sku === l.sku).name, qty: l.qty, price: l.price, discount: l.discount }))
       });
       toast(`${o.id} ${status === 'Draft' ? 'saved as draft' : 'confirmed'}`);
@@ -756,7 +861,7 @@ function viewOrderNew() {
     };
     $('#so-confirm').onclick = () => save('Confirmed');
     $('#so-draft').onclick = () => save('Draft');
-    drawLines(); drawSum(); drawCust();
+    drawLic();
   });
 }
 
@@ -766,28 +871,51 @@ function viewOrder(id) {
   const c = Store.customer(o.customerId);
   const t = orderTotals(o);
   const idx = ORDER_FLOW.indexOf(o.status);
+  const lic = o.license || { model: 'Subscription', billing: 'Yearly' };
   const next = { Draft: ['Confirmed', 'Confirm order'], Confirmed: ['Delivered', 'Mark as delivered'], Delivered: ['Invoiced', 'Create invoice'] }[o.status];
+  const canPay = ['Confirmed', 'Delivered', 'Invoiced'].includes(o.status);
   const primary = c ? Store.contacts(c.id).find(p => p.primary) : null;
+  const hasAccess = c && c.access && c.access.orderId === o.id;
 
   shell('/orders', `
     <a href="#/orders" class="crumb">${icon('arrowLeft', 14)}Sale orders</a>
     <div class="page-head">
-      <div><h1 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="mono" style="font-size:24px;color:var(--text)">${o.id}</span>${pill(o.status)}</h1><p>${fmtDate(o.date)}${o.terms ? ' · ' + esc(o.terms) : ''}</p></div>
+      <div><h1 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="mono" style="font-size:24px;color:var(--text)">${o.id}</span>${pill(o.status)}</h1><p>${fmtDate(o.date)}${o.terms ? ' · ' + esc(o.terms) : ''} · ${licenseLabel(lic)}</p></div>
       <div class="page-actions">
-        ${o.status !== 'Cancelled' && o.status !== 'Invoiced' ? `<button class="btn btn-ghost btn-danger" id="cancel-o">Cancel order</button>` : ''}
+        ${!['Cancelled', 'Paid', 'Invoiced'].includes(o.status) ? `<button class="btn btn-ghost btn-danger" id="cancel-o">Cancel order</button>` : ''}
         <button class="btn" onclick="window.print()">${icon('printer', 16)}Print</button>
-        ${next ? `<button class="btn btn-primary" id="advance">${icon('check', 16)}${next[1]}</button>` : ''}
+        ${next ? `<button class="btn ${canPay ? '' : 'btn-primary'}" id="advance">${icon('check', 16)}${next[1]}</button>` : ''}
+        ${canPay ? `<button class="btn btn-primary" id="pay">${icon('dollar', 16)}Record payment</button>` : ''}
+        ${o.status === 'Paid' && c ? `<button class="btn btn-primary" id="access">${icon('link', 16)}Customer access link</button>` : ''}
       </div>
     </div>
-    ${o.status !== 'Cancelled' ? `<div class="steps" style="margin-bottom:18px">${ORDER_FLOW.map((s, i) => `<div class="step ${i < idx ? 'done' : i === idx ? 'current' : ''}"><i>${i < idx ? '✓' : i + 1}</i>${s}</div>`).join('')}</div>` : ''}
+    ${o.status !== 'Cancelled' ? `<div class="steps" style="margin-bottom:18px">${ORDER_FLOW.map((s, i) => `<div class="step ${i < idx || o.status === 'Paid' ? 'done' : i === idx ? 'current' : ''}"><i>${i < idx || o.status === 'Paid' ? '✓' : i + 1}</i>${s}</div>`).join('')}</div>` : ''}
     <div class="grid so-layout">
-      <div class="glass card">
-        <div class="card-head"><div class="card-title">Order lines</div></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Disc.</th><th class="num">Amount</th></tr></thead>
-          <tbody>${o.lines.map(l => `<tr><td><b style="font-weight:500">${esc(l.name)}</b><div class="mono" style="font-size:11.5px">${esc(l.sku)}</div></td><td class="num">${l.qty}</td><td class="num">${money(l.price, 2)}</td><td class="num muted">${l.discount ? l.discount + '%' : '—'}</td><td class="num"><b>${money(l.qty * l.price * (1 - (l.discount || 0) / 100), 2)}</b></td></tr>`).join('')}</tbody>
-        </table></div>
-        ${o.notes ? `<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)"><div class="card-sub" style="margin-bottom:6px">Notes</div>${esc(o.notes)}</div>` : ''}
+      <div class="grid" style="gap:18px">
+        <div class="glass card">
+          <div class="card-head"><div class="card-title">Order lines</div></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Disc.</th><th class="num">Amount</th></tr></thead>
+            <tbody>${o.lines.map(l => `<tr><td><b style="font-weight:500">${esc(l.name)}</b><div class="mono" style="font-size:11.5px">${esc(l.sku)}</div></td><td class="num">${l.qty}</td><td class="num">${money(l.price, 2)}${isLicense(l.sku) ? `<div class="unit-suffix">${licenseSuffix(lic.model, lic.billing)}</div>` : ''}</td><td class="num muted">${l.discount ? l.discount + '%' : '—'}</td><td class="num"><b>${money(l.qty * l.price * (1 - (l.discount || 0) / 100), 2)}</b></td></tr>`).join('')}</tbody>
+          </table></div>
+          ${o.notes ? `<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)"><div class="card-sub" style="margin-bottom:6px">Notes</div>${esc(o.notes)}</div>` : ''}
+        </div>
+        <div class="grid row-1-1">
+          <div class="glass card"><div class="card-head"><div class="card-title">Licensing</div>${pill(lic.model)}</div>
+            <div class="info-list">
+              <div><span>Model</span><b>${lic.model}</b></div>
+              ${lic.model === 'Subscription' ? `<div><span>Billing</span><b>${lic.billing}</b></div>` : ''}
+              ${o.status === 'Paid' && hasAccess ? `<div><span>POS access</span><b>${pill(accessStatus(c))}</b></div><div><span>Validity</span><b>${validityLabel(c.access)}</b></div>` : `<div><span>POS access</span><b class="muted">${o.status === 'Paid' ? 'Covered by a newer order' : 'Activates when paid'}</b></div>`}
+            </div></div>
+          <div class="glass card"><div class="card-head"><div class="card-title">Payment</div>${o.payment ? pill('Paid') : `<span class="pill gray">Unpaid</span>`}</div>
+            ${o.payment ? `<div class="info-list">
+              <div><span>Paid on</span><b>${fmtDate(o.payment.date)}</b></div>
+              <div><span>Method</span><b>${esc(o.payment.method)}</b></div>
+              ${o.payment.reference ? `<div><span>Reference</span><b class="mono">${esc(o.payment.reference)}</b></div>` : ''}
+              <div><span>Amount</span><b>${money(t.total, 2)}</b></div></div>`
+            : `<div class="muted" style="font-size:13px">${canPay ? 'Record the payment when it arrives. That activates the customer\'s POS access and gives you their link.' : o.status === 'Draft' ? 'Confirm the order first.' : 'No payment.'}</div>`}
+          </div>
+        </div>
       </div>
       <div class="glass card summary">
         <div class="card-head"><div class="card-title">Customer</div></div>
@@ -802,9 +930,76 @@ function viewOrder(id) {
   `, () => {
     const adv = $('#advance');
     if (adv) adv.onclick = () => { Store.updateOrder(o.id, { status: next[0] }); toast(`${o.id} → ${next[0]}`); render(); };
+    const pay = $('#pay'); if (pay) pay.onclick = () => openPaymentModal(o.id);
+    const acc = $('#access'); if (acc) acc.onclick = () => openAccessModal(c.id);
     const can = $('#cancel-o');
     if (can) can.onclick = () => modal(`<h2>Cancel ${o.id}?</h2><div class="card-sub">The order will be kept but marked as cancelled.</div><div class="modal-actions"><button class="btn" data-close>Keep order</button><button class="btn btn-primary" id="yes">Cancel order</button></div>`,
       (m, close) => { $('#yes', m).onclick = () => { Store.updateOrder(o.id, { status: 'Cancelled' }); close(); toast(`${o.id} cancelled`); render(); }; });
+  });
+}
+
+function openPaymentModal(orderId) {
+  const o = Store.order(orderId);
+  const c = Store.customer(o.customerId);
+  const lic = { ...(o.license || { model: 'Subscription', billing: 'Yearly' }) };
+  const hasLicenses = o.lines.some(l => isLicense(l.sku));
+  const today = localToday();
+  modal(`
+    <h2>Record payment · ${o.id}</h2>
+    <div class="card-sub">${esc(c.name)}. Marks the order as paid and activates their POS access.</div>
+    <form id="pay-form">
+      <div class="form-grid">
+        <div class="field"><label>Payment date</label><input class="input" type="date" name="date" value="${today}" required /></div>
+        <div class="field"><label>Method</label><select class="input" name="method"><option>Bank transfer</option><option>Cash</option><option>Cheque</option><option>Card</option><option>OMT / Whish</option></select></div>
+        <div class="field full"><label>Reference (optional)</label><input class="input" name="reference" placeholder="Transfer ID, cheque no.…" /></div>
+        <div class="field full"><label>License model</label><div class="seg" id="pm-model">${LICENSE_MODELS.map(m => `<button type="button" data-m="${m}">${m}</button>`).join('')}</div></div>
+        <div class="field full" id="pm-billing-f"><label>Billing period</label><div class="seg" id="pm-billing">${BILLING_PERIODS.map(b => `<button type="button" data-b="${b}">${b}</button>`).join('')}</div></div>
+      </div>
+      <div class="access-box" style="margin-top:16px" id="pm-preview"></div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" name="activate" checked /> Activate POS access and create the customer's link</label>
+      <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary">${icon('check', 16)}Mark as paid</button></div>
+    </form>`, (m, close) => {
+    const form = $('#pay-form', m);
+    const preview = () => {
+      $$('#pm-model button', m).forEach(b => b.classList.toggle('active', b.dataset.m === lic.model));
+      $$('#pm-billing button', m).forEach(b => b.classList.toggle('active', b.dataset.b === lic.billing));
+      $('#pm-billing-f', m).style.display = lic.model === 'Perpetual' ? 'none' : '';
+      const start = form.elements.date.value || today;
+      const repriced = { ...o, lines: o.lines.map(l => { const p = PRODUCTS.find(x => x.sku === l.sku); return p && p.category === 'License' ? { ...l, price: licensePrice(p, lic.model, lic.billing) } : l; }) };
+      const changed = Math.abs(orderTotals(repriced).total - orderTotals(o).total) > 0.005;
+      $('#pm-preview', m).innerHTML = `
+        <div class="access-row"><span>Amount received</span><b>${money(orderTotals(repriced).total, 2)}</b></div>
+        <div class="access-row"><span>POS access</span><b>${lic.model === 'Perpetual' ? 'Permanent, no expiry' : `${fmtDate(start)} → ${fmtDate(addPeriod(start, lic.billing))}`}</b></div>
+        ${changed ? `<div class="access-row"><span></span><b style="color:var(--amber);font-size:12px">License prices updated for ${lic.model === 'Perpetual' ? 'perpetual' : lic.billing.toLowerCase()}</b></div>` : ''}
+        ${hasLicenses ? '' : `<div class="access-row"><span></span><b style="color:var(--muted);font-size:12px">This order has no license lines</b></div>`}`;
+      return repriced;
+    };
+    $$('#pm-model button', m).forEach(b => b.onclick = () => { lic.model = b.dataset.m; preview(); });
+    $$('#pm-billing button', m).forEach(b => b.onclick = () => { lic.billing = b.dataset.b; preview(); });
+    form.elements.date.oninput = preview;
+    preview();
+    form.onsubmit = e => {
+      e.preventDefault();
+      const repriced = preview();
+      const date = form.elements.date.value || today;
+      Store.updateOrder(o.id, {
+        status: 'Paid', lines: repriced.lines, license: { ...lic },
+        payment: { date, method: form.elements.method.value, reference: form.elements.reference.value.trim() }
+      });
+      if (c.status === 'Onboarding') { c.status = 'Active'; Store.save(); }
+      const activate = form.elements.activate.checked;
+      if (activate) {
+        const prev = c.access;
+        // Renewal of the same customer: keep the same link so they don't need a new one
+        Store.setAccess(c.id, {
+          token: prev && !prev.revoked ? prev.token : newToken(), orderId: o.id,
+          model: lic.model, billing: lic.model === 'Perpetual' ? null : lic.billing,
+          start: date, end: lic.model === 'Perpetual' ? null : addPeriod(date, lic.billing), revoked: false
+        });
+      }
+      close(); toast(`${o.id} marked as paid`); render();
+      if (activate) openAccessModal(c.id);
+    };
   });
 }
 

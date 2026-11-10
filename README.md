@@ -1,4 +1,4 @@
-# Technica POS — Portal (UI prototype)
+# Socially Middle East — POS Portal (UI prototype)
 
 Sales portal for the restaurant & hotel POS: login, overview dashboard, customers (with per-customer orders, contacts, devices & licenses, notes), sale orders (create / confirm / deliver / invoice / cancel) and contacts.
 

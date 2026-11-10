@@ -141,7 +141,7 @@ function renderLock(p, r) {
         ${p ? `<div class="lock-biz">${esc(p.n)}</div>` : ''}
         <h1>${esc(r.title)}</h1>
         <p>${esc(r.text)}</p>
-        <div class="lock-foot">Powered by Technica POS</div>
+        <div class="lock-foot">Powered by Socially Middle East</div>
       </div>
     </div>`;
 }
@@ -169,8 +169,8 @@ function boot(p) {
       <header class="pos-top glass">
         <div class="pos-brand"><div class="pos-logo">${esc(initials(p.n))}</div><div><b>${esc(p.n)}</b><span>${esc(p.t)} · ${esc(p.c || '')} · Terminal 1</span></div></div>
         <nav class="pos-tabs">
-          <button data-v="register" class="${state.view === 'register' ? 'active' : ''}">${icon('grid', 16)}<span>Register</span></button>
-          <button data-v="sales" class="${state.view === 'sales' ? 'active' : ''}">${icon('receipt', 16)}<span>Sales today</span></button>
+          <button data-fx data-v="register" class="${state.view === 'register' ? 'active' : ''}">${icon('grid', 16)}<span>Register</span></button>
+          <button data-fx data-v="sales" class="${state.view === 'sales' ? 'active' : ''}">${icon('receipt', 16)}<span>Sales today</span></button>
         </nav>
         <div class="pos-right">
           <button class="lic-chip ${daysLeft !== null && daysLeft <= 30 ? 'warn' : ''}" id="lic-chip" title="License">${icon('key', 14)}<span>${daysLeft !== null && daysLeft <= 30 ? `Renews in ${daysLeft} day${daysLeft === 1 ? '' : 's'}` : licText}</span></button>
@@ -180,6 +180,7 @@ function boot(p) {
       </header>
       <main id="pos-main"></main>`;
     $$('.pos-tabs button').forEach(b => b.onclick = () => { state.view = b.dataset.v; frame(); });
+    NavFX.attach($('.pos-tabs'), 'pos');
     $('#lic-chip').onclick = showLicense;
     tick(); clearInterval(window.__clock); window.__clock = setInterval(tick, 15000);
     state.view === 'register' ? register() : salesView();

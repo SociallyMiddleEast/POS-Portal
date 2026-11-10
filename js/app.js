@@ -1,5 +1,5 @@
 // ------------------------------------------------------------------
-// Technica POS Portal — UI only (vanilla JS, hash router, no build).
+// Socially Middle East — POS Portal — UI only (vanilla JS, hash router, no build).
 // ------------------------------------------------------------------
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -89,7 +89,7 @@ function openAccessModal(customerId) {
   }
   const a = c.access;
   const link = accessLink(c);
-  const msg = `Hello ${c.name}, here is your Technica POS access link: ${link}`;
+  const msg = `Hello ${c.name}, here is your Socially Middle East POS access link: ${link}`;
   modal(`
     <h2>POS access link</h2>
     <div class="card-sub">Private link to ${esc(c.name)}'s own POS. It doesn't give access to this portal.</div>
@@ -106,7 +106,7 @@ function openAccessModal(customerId) {
     <div class="share-row">
       <a class="btn btn-sm" href="${esc(link)}" target="_blank" rel="noopener">${icon('external', 14)}Open POS</a>
       <a class="btn btn-sm" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">${icon('phone', 14)}WhatsApp</a>
-      <a class="btn btn-sm" href="mailto:${esc(c.email || '')}?subject=${encodeURIComponent('Your Technica POS access')}&body=${encodeURIComponent(msg)}">${icon('mail', 14)}Email</a>
+      <a class="btn btn-sm" href="mailto:${esc(c.email || '')}?subject=${encodeURIComponent('Your Socially Middle East POS access')}&body=${encodeURIComponent(msg)}">${icon('mail', 14)}Email</a>
     </div>
     <div class="modal-actions" style="justify-content:space-between">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -195,11 +195,11 @@ const NAV = [
 
 function shell(active, content, mount) {
   const u = currentUser();
-  const links = NAV.map(n => `<a href="#${n.href}" class="nav-link ${active === n.href ? 'active' : ''}">${icon(n.icon, 16)}${n.label}</a>`).join('');
+  const links = NAV.map(n => `<a href="#${n.href}" data-fx class="nav-link ${active === n.href ? 'active' : ''}">${icon(n.icon, 16)}<span>${n.label}</span></a>`).join('');
   app.innerHTML = `
   <div class="shell">
     <nav class="navbar glass">
-      <a href="#/overview" class="brand"><span class="brand-mark">${icon('logo', 18)}</span><span>Technica POS<small>PORTAL</small></span></a>
+      <a href="#/overview" class="brand"><span class="brand-mark">${icon('logo', 18)}</span><span>Socially Middle East<small>POS PORTAL</small></span></a>
       <div class="nav-links">${links}</div>
       <div class="nav-right">
         <form class="search nav-search" id="nav-search">${icon('search', 15)}<input placeholder="Search customers…" aria-label="Search customers" /></form>
@@ -212,14 +212,15 @@ function shell(active, content, mount) {
             <button class="menu-item" id="logout">${icon('logout', 16)}Log out</button>
           </div>
         </div>
-        <button class="btn btn-icon btn-ghost nav-burger" id="burger" aria-label="Menu">${icon('menu', 20)}</button>
+        <button class="btn btn-icon btn-ghost nav-burger" id="burger" aria-label="Menu"><i></i><i></i><i></i></button>
       </div>
     </nav>
     <div class="mobile-nav glass" id="mobile-nav">${links}</div>
     <main class="view">${content}</main>
   </div>`;
 
-  $('#burger').onclick = () => $('#mobile-nav').classList.toggle('open');
+  NavFX.attach($('.nav-links'), 'portal');
+  $('#burger').onclick = () => { $('#mobile-nav').classList.toggle('open'); $('#burger').classList.toggle('x'); };
   $('#user-btn').onclick = e => { e.stopPropagation(); $('#user-menu').classList.toggle('open'); };
   document.onclick = e => { if (!e.target.closest('.user-chip')) $('#user-menu')?.classList.remove('open'); };
   $('#logout').onclick = () => { Auth.logout(); go('/login'); };
@@ -234,7 +235,7 @@ function shell(active, content, mount) {
 function viewLogin() {
   app.innerHTML = `
   <div class="login-wrap">
-    <div class="login-brand"><span class="brand-mark">${icon('logo', 18)}</span>Technica POS</div>
+    <div class="login-brand"><span class="brand-mark">${icon('logo', 18)}</span>Socially Middle East</div>
     <div class="login-card glass" id="lc">
       <div class="slider"></div>
 

@@ -449,3 +449,5 @@ th:last-child, td:last-child { padding-right: 0; }
 .access-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .access-card-main { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .access-card .card-sub { margin-top: 4px; }
+.link-btn { gap: 6px; }
+.card-link { align-self: flex-start; }

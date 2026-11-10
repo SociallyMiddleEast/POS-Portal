@@ -388,7 +388,7 @@ function viewOverview() {
               <td>${pill(c.status)}</td>
               <td class="num">${orders}</td>
               <td class="num"><b>${money(revenue)}</b></td>
-              <td class="num"><a class="btn btn-sm btn-ghost btn-icon" href="#/orders/new?customer=${c.id}" title="New order for ${esc(c.name)}" onclick="event.stopPropagation()">${icon('plus', 15)}</a></td>
+              <td class="num" style="white-space:nowrap"><button class="btn btn-sm link-btn" data-link="${c.id}" title="Customer POS link">${icon('link', 14)}Link</button> <a class="btn btn-sm btn-ghost btn-icon" href="#/orders/new?customer=${c.id}" title="New order for ${esc(c.name)}" onclick="event.stopPropagation()">${icon('plus', 15)}</a></td>
             </tr>`).join('')}</tbody>
         </table></div>
       </div>
@@ -410,7 +410,13 @@ function viewOverview() {
   });
 }
 
-function bindRowLinks() { $$('tr[data-href]').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
+function bindRowLinks() {
+  $$('tr[data-href]').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
+  bindLinkButtons();
+}
+function bindLinkButtons() {
+  $$('[data-link]').forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); openAccessModal(b.dataset.link); });
+}
 
 function donutSvg(parts) {
   const total = parts.reduce((s, p) => s + p.v, 0) || 1;
@@ -487,17 +493,19 @@ function viewCustomers() {
           const s = customerStats(c.id);
           return `<a class="glass cust-card" href="#/customers/${c.id}">
             <div class="top">${avatar(c.name, c.id)}<div><b>${esc(c.name)}</b><span>${esc(c.type)} · ${esc(c.city)}</span></div>${pill(c.status)}</div>
+            <button class="btn btn-sm link-btn card-link" data-link="${c.id}">${icon('link', 14)}${c.access ? 'Customer link' : 'Set up access'}${c.access && accessStatus(c) !== 'Active' ? ` · ${accessStatus(c)}` : ''}</button>
             <div class="meta"><div><span>Orders</span><b>${s.orders}</b></div><div><span>Revenue</span><b>${money(s.revenue / 1000, 1)}k</b></div><div><span>License</span><b>${c.access ? (c.access.model === 'Perpetual' ? 'Perpetual' : c.access.billing) : '—'}</b></div></div>
           </a>`;
         }).join('')}</div>`;
+        bindLinkButtons();
       } else {
         box.innerHTML = `<div class="glass card"><div class="table-wrap"><table>
-          <thead><tr><th>Customer</th><th>Type</th><th>City</th><th>Plan</th><th>Status</th><th>POS access</th><th class="num">Open orders</th><th class="num">Revenue</th></tr></thead>
+          <thead><tr><th>Customer</th><th>Type</th><th>City</th><th>Plan</th><th>Status</th><th>POS access</th><th class="num">Open orders</th><th class="num">Revenue</th><th></th></tr></thead>
           <tbody>${list.map(c => { const s = customerStats(c.id); return `
             <tr class="clickable" data-href="#/customers/${c.id}">
               <td><div class="cell-main">${avatar(c.name, c.id)}<div><b>${esc(c.name)}</b><small>${esc(c.email)}</small></div></div></td>
               <td><span class="tag">${esc(c.type)}</span></td><td class="muted">${esc(c.city)}</td><td>${esc(c.plan)}</td><td>${pill(c.status)}</td><td>${c.access ? `<span class="tag">${c.access.model === 'Perpetual' ? 'Perpetual' : c.access.billing}</span> ` : ''}${accessStatus(c) === 'Active' ? '' : pill(accessStatus(c))}</td>
-              <td class="num">${s.open}</td><td class="num"><b>${money(s.revenue)}</b></td></tr>`; }).join('')}</tbody>
+              <td class="num">${s.open}</td><td class="num"><b>${money(s.revenue)}</b></td><td class="num"><button class="btn btn-sm link-btn" data-link="${c.id}">${icon('link', 14)}Link</button></td></tr>`; }).join('')}</tbody>
         </table></div></div>`;
         bindRowLinks();
       }

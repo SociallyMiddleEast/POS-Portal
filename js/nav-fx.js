@@ -23,25 +23,28 @@ const NavFX = {
     const pos = el => {
       const c = container.getBoundingClientRect(), e = el.getBoundingClientRect();
       const bl = container.clientLeft, br = container.offsetWidth - container.clientWidth - bl;
-      return { l: e.left - c.left - bl, r: c.right - e.right - br };
+      const bt = container.clientTop, bb = container.offsetHeight - container.clientHeight - bt;
+      return { l: e.left - c.left - bl, r: c.right - e.right - br, t: e.top - c.top - bt, b: c.bottom - e.bottom - bb };
     };
-    const set = (node, p) => { node.style.left = p.l + 'px'; node.style.right = p.r + 'px'; };
+    const set = (node, p) => { node.style.left = p.l + 'px'; node.style.right = p.r + 'px'; node.style.top = p.t + 'px'; node.style.bottom = p.b + 'px'; };
 
     const place = (animate) => {
       if (!active || !active.offsetParent) { ind.style.opacity = 0; return; }
       ind.style.opacity = 1;
       const to = pos(active);
       const from = this.prev[key];
-      if (animate && from && Math.abs(from.l - to.l) > 2 && !this.reduce) {
+      const dx = from ? to.l - from.l : 0, dy = from ? to.t - from.t : 0;
+      if (animate && from && (Math.abs(dx) > 2 || Math.abs(dy) > 2) && !this.reduce) {
         set(ind, from);
         void ind.offsetWidth;                       // commit start position
         ind.classList.remove('no-anim');
-        ind.classList.add(to.l > from.l ? 'go-right' : 'go-left', 'moving');
+        const vertical = Math.abs(dy) > Math.abs(dx);
+        ind.classList.add(vertical ? (dy > 0 ? 'go-down' : 'go-up') : (dx > 0 ? 'go-right' : 'go-left'), vertical ? 'moving-v' : 'moving');
         active.classList.add('arriving');
         requestAnimationFrame(() => set(ind, to));
         clearTimeout(ind._t);
         ind._t = setTimeout(() => {
-          ind.classList.remove('go-right', 'go-left', 'moving');
+          ind.classList.remove('go-right', 'go-left', 'go-down', 'go-up', 'moving', 'moving-v');
           ind.classList.add('arrived');
           active.classList.remove('arriving');
           setTimeout(() => ind.classList.remove('arrived'), 800);

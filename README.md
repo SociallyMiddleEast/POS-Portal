@@ -21,6 +21,18 @@ Plain HTML + CSS + JavaScript. No build step, no backend, no database yet — da
 
 > For now the link carries the business and license info inside the URL (`#…`), so it works on any device without a database. With a backend, the link should carry only the random token, and `client.html` should check it with the server. That also makes revoking access work everywhere.
 
+## Customer POS: Admin
+
+On the customer POS, tap **Admin** and enter the PIN (demo: **1234**; you can change it in Settings).
+- **Dashboard:** revenue, number of orders, average order and items sold, each compared with the previous period. Also sales by day, by category, busiest hours, payment methods, order types, and the best and least selling items.
+- **Orders:** every sale, searchable by order #, item, table or room, and filterable by payment and order type. Tap an order to see its receipt. You can export to CSV.
+- **Item sales:** search any item and see quantity sold, net sales, share of sales, number of orders, change vs the previous period, and last sold date, for any period (Today, Yesterday, 7 days, 30 days, This month, or Custom dates). The table sorts by any column. Tap an item to see its daily chart, the times of day it sells, and its split by order type.
+- **Menu:** add, rename, reorder or delete categories. Add, edit or delete items, and show or hide each one on the register.
+- **Tables:** areas and tables with their seats. You can add several at once, rename areas, and see how many orders each table had today.
+- **Settings:** name on receipts, VAT %, LBP rate, receipt footer, order types, admin PIN, CSV export, demo data.
+
+Each business keeps its own menu, tables and sales in its browser for now. About 45 days of demo sales are generated so the reports have something to show; you can remove them in Settings.
+
 ## Run locally
 
 ```bash
@@ -52,7 +64,9 @@ js/icons.js       inline SVG icons
 js/data.js        mock data + Store (the only data layer)
 js/app.js         portal: router, views, auth (UI only)
 client.html       customer POS (opened from the access link)
-js/client.js      customer POS logic + menus per business type
+js/client.js      customer POS: register, payment, PIN, default menus & demo history
+js/client-admin.js customer POS admin: dashboard, orders, item sales, menu, tables, settings
+js/nav-fx.js      sliding navigation highlight
 css/client.css    customer POS styles
 assets/bg.svg     background
 ```

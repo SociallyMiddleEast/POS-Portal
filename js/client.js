@@ -128,9 +128,9 @@ const MENUS = {
 const P = decodeLink();
 const lock = lockReason(P);
 const root = $('#pos');
+const needsTable = t => ['Dine-in', 'Table', 'Restaurant', 'Pool bar'].includes(t);
+const needsRoom = t => t === 'Room service';
 
-if (lock) renderLock(P, lock);
-else boot(P);
 
 function renderLock(p, r) {
   document.title = p ? `${p.n} · POS` : 'POS';
@@ -146,46 +146,178 @@ function renderLock(p, r) {
     </div>`;
 }
 
-function boot(p) {
-  document.title = `${p.n} · POS`;
+// ---------- per-business configuration (menu, tables, settings) ----------
+const TABLE_LAYOUTS = {
+  Restaurant: [['Indoor', 'T', 10, 4], ['Terrace', 'P', 6, 2]],
+  Café: [['Indoor', 'T', 6, 2], ['Outdoor', 'O', 4, 2]],
+  Bar: [['Bar counter', 'B', 8, 1], ['Lounge', 'L', 6, 4]],
+  Bakery: [['Indoor', 'T', 4, 2]],
+  Hotel: [['Restaurant', 'R', 10, 4], ['Pool bar', 'PB', 6, 2]]
+};
+function seedConfig(p) {
   const menu = MENUS[p.t] || MENUS.Restaurant;
-  const items = menu.items.map(([name, price, cat, e], i) => ({ id: 'i' + i, name, price, cat, e }));
-  const SALES_KEY = `pos-client-${p.i}-sales`;
-  const state = {
-    view: 'register', cat: 'All', q: '',
-    type: menu.types[0], table: '', room: '',
-    cart: [], sheet: false
-  };
-  const sales = () => store.get(SALES_KEY, []);
-  const nextTicket = () => sales().length + 1;
-  const cartTotals = () => { const sub = state.cart.reduce((s, l) => s + l.price * l.qty, 0); const vat = sub * VAT; return { sub, vat, total: sub + vat, count: state.cart.reduce((s, l) => s + l.qty, 0) }; };
-  const needsTable = t => ['Dine-in', 'Table', 'Restaurant', 'Pool bar'].includes(t);
-  const needsRoom = t => t === 'Room service';
+  const cats = menu.cats.map((name, i) => ({ id: 'c' + i, name }));
+  const items = menu.items.map(([name, price, cat, e], i) => ({ id: 'i' + i, name, price, cat: cats.find(c => c.name === cat).id, e, active: true }));
+  const tables = [];
+  (TABLE_LAYOUTS[p.t] || TABLE_LAYOUTS.Restaurant).forEach(([zone, pre, n, seats]) => {
+    for (let k = 1; k <= n; k++) tables.push({ id: 'tb' + tables.length, name: pre + k, zone, seats });
+  });
+  return { v: 1, cats, items, tables, types: menu.types, settings: { name: p.n, vat: 11, lbp: LBP_RATE, pin: '1234', footer: 'Thank you for your visit!' } };
+}
+
+// Demo sales history so the admin reports have something to show.
+function seedSales(p, cfg, days = 45) {
+  let s = 0; for (const ch of p.i + p.n) s = (s * 31 + ch.charCodeAt(0)) % 233280;
+  const rnd = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  // popularity: a few stars, a long tail, one item that never sells
+  const weights = cfg.items.map((it, i) => {
+    if (i === cfg.items.length - 2) return 0;          // never sold
+    const r = rnd();
+    return r > 0.82 ? 6 + rnd() * 6 : r > 0.25 ? 1 + rnd() * 3 : 0.08 + rnd() * 0.3;
+  });
+  const wsum = weights.reduce((a, b) => a + b, 0);
+  const pickItem = () => { let x = rnd() * wsum; for (let i = 0; i < weights.length; i++) { x -= weights[i]; if (x <= 0) return cfg.items[i]; } return cfg.items[0]; };
+  const HOURS = {
+    Café: [[7, 3], [8, 6], [9, 7], [10, 5], [11, 4], [12, 4], [13, 3], [14, 3], [15, 3], [16, 4], [17, 3], [18, 2], [19, 1]],
+    Bakery: [[6, 4], [7, 8], [8, 9], [9, 7], [10, 5], [11, 4], [12, 4], [13, 3], [14, 2], [15, 2], [16, 2], [17, 3], [18, 2]],
+    Bar: [[17, 2], [18, 4], [19, 5], [20, 7], [21, 9], [22, 10], [23, 8], [0, 5], [1, 2]],
+    def: [[11, 1], [12, 4], [13, 7], [14, 6], [15, 3], [16, 1], [17, 1], [18, 2], [19, 5], [20, 8], [21, 7], [22, 4], [23, 1]]
+  }[p.t] || [[7, 3], [8, 4], [9, 3], [12, 4], [13, 6], [14, 4], [19, 4], [20, 6], [21, 5], [22, 3]];
+  const hsum = HOURS.reduce((a, h) => a + h[1], 0);
+  const pickHour = () => { let x = rnd() * hsum; for (const [h, w] of HOURS) { x -= w; if (x <= 0) return h; } return HOURS[0][0]; };
+  const base = { Restaurant: 34, Café: 55, Bar: 40, Bakery: 70, Hotel: 38 }[p.t] || 34;
+  const vat = cfg.settings.vat / 100;
+  const now = new Date();
+  const out = [];
+  for (let d = days - 1; d >= 0; d--) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - d);
+    const wk = day.getDay();
+    const n = Math.round(base * (wk === 5 || wk === 6 ? 1.35 : wk === 1 ? 0.8 : 1) * (0.75 + rnd() * 0.5) * (0.85 + (days - d) / days * 0.3));
+    for (let k = 0; k < n; k++) {
+      const h = pickHour();
+      const at = new Date(day.getFullYear(), day.getMonth(), day.getDate() + (h < 5 ? 1 : 0), h, Math.floor(rnd() * 60));
+      if (at > now) continue;
+      const lines = [];
+      const nl = 1 + Math.floor(rnd() * rnd() * 5);
+      for (let l = 0; l < nl; l++) {
+        const it = pickItem();
+        const ex = lines.find(x => x.id === it.id);
+        ex ? ex.qty++ : lines.push({ id: it.id, name: it.name, cat: it.cat, qty: rnd() > 0.8 ? 2 : 1, price: it.price });
+      }
+      const type = cfg.types[rnd() < 0.62 ? 0 : 1 + Math.floor(rnd() * (cfg.types.length - 1))] || cfg.types[0];
+      const zoneTables = cfg.tables;
+      const sub = lines.reduce((a, l) => a + l.price * l.qty, 0);
+      const r2 = rnd();
+      const method = p.t === 'Hotel' && r2 > 0.85 ? 'Room charge' : r2 > 0.48 ? 'Card' : 'Cash';
+      out.push({
+        at: at.toISOString(), date: isoDate(at), type,
+        table: needsTable(type) && zoneTables.length ? zoneTables[Math.floor(rnd() * zoneTables.length)].name : '',
+        room: needsRoom(type) || method === 'Room charge' ? String(100 + Math.floor(rnd() * 5) * 100 + Math.floor(rnd() * 20)) : '',
+        lines, sub, vat: sub * vat, total: sub * (1 + vat), count: lines.reduce((a, l) => a + l.qty, 0), method, tender: null, demo: true
+      });
+    }
+  }
+  out.sort((a, b) => a.at.localeCompare(b.at));
+  out.forEach((o, i) => o.no = i + 1);
+  return out;
+}
+function isoDate(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+
+function boot(p) {
+  const CFG_KEY = `pos-client-${p.i}-cfg`;
+  const SALES_KEY = `pos-client-${p.i}-sales-v2`;
+  const ADMIN_KEY = `pos-client-${p.i}-admin`;
+  let cfg = store.get(CFG_KEY, null);
+  if (!cfg) { cfg = seedConfig(p); store.set(CFG_KEY, cfg); }
+  let salesCache = store.get(SALES_KEY, null);
+  if (!salesCache) { salesCache = seedSales(p, cfg); store.set(SALES_KEY, salesCache); }
+
+  document.title = `${cfg.settings.name || p.n} · POS`;
+  const state = { view: 'register', cat: 'All', q: '', type: cfg.types[0], table: '', room: '', cart: [], sheet: false };
+
+  const vatRate = () => (Number(cfg.settings.vat) || 0) / 100;
+  const sales = () => salesCache;
+  const saveSales = list => { salesCache = list; store.set(SALES_KEY, list); };
+  const nextTicket = () => salesCache.reduce((m, s) => Math.max(m, s.no), 0) + 1;
+  const activeItems = () => cfg.items.filter(i => i.active !== false);
+  const catName = id => (cfg.cats.find(c => c.id === id) || {}).name || 'Uncategorized';
+  const cartTotals = () => { const sub = state.cart.reduce((s, l) => s + l.price * l.qty, 0); const vat = sub * vatRate(); return { sub, vat, total: sub + vat, count: state.cart.reduce((s, l) => s + l.qty, 0) }; };
+  const isAdmin = () => { try { return sessionStorage.getItem(ADMIN_KEY) === '1'; } catch (e) { return !!window.__admin; } };
+  const setAdmin = v => { try { v ? sessionStorage.setItem(ADMIN_KEY, '1') : sessionStorage.removeItem(ADMIN_KEY); } catch (e) {} window.__admin = v; };
   const licText = p.m === 'Perpetual' ? 'Perpetual license' : `${p.b} plan · until ${fmtDate(p.e)}`;
   const daysLeft = p.m === 'Subscription' && p.e ? Math.ceil((new Date(p.e + 'T00:00:00') - new Date()) / 864e5) : null;
 
+  // context shared with the admin module
+  const ctx = {
+    p, get cfg() { return cfg; },
+    saveCfg() { store.set(CFG_KEY, cfg); document.title = `${cfg.settings.name || p.n} · POS`; },
+    resetCfg() { cfg = seedConfig(p); store.set(CFG_KEY, cfg); },
+    sales, saveSales,
+    reseedSales() {
+      const real = salesCache.filter(x => !x.demo);
+      const all = [...seedSales(p, cfg), ...real].sort((x, y) => x.at.localeCompare(y.at));
+      all.forEach((x, i) => x.no = i + 1);
+      saveSales(all);
+    },
+    catName, receipt, rerender: () => frame(), lock: () => { setAdmin(false); state.view = 'register'; frame(); toast('Admin locked'); },
+    money, esc, modal, toast, fmtDate, today, icon, needsTable, needsRoom, vatRate
+  };
+
   function frame() {
+    if (state.view === 'admin' && !isAdmin()) state.view = 'register';
     root.innerHTML = `
       <header class="pos-top glass">
-        <div class="pos-brand"><div class="pos-logo">${esc(initials(p.n))}</div><div><b>${esc(p.n)}</b><span>${esc(p.t)} · ${esc(p.c || '')} · Terminal 1</span></div></div>
+        <div class="pos-brand"><div class="pos-logo">${esc(initials(cfg.settings.name || p.n))}</div><div><b>${esc(cfg.settings.name || p.n)}</b><span>${esc(p.t)} · ${esc(p.c || '')} · Terminal 1</span></div></div>
         <nav class="pos-tabs">
           <button data-fx data-v="register" class="${state.view === 'register' ? 'active' : ''}">${icon('grid', 16)}<span>Register</span></button>
-          <button data-fx data-v="sales" class="${state.view === 'sales' ? 'active' : ''}">${icon('receipt', 16)}<span>Sales today</span></button>
+          <button data-fx data-v="sales" class="${state.view === 'sales' ? 'active' : ''}">${icon('receipt', 16)}<span>Today</span></button>
+          <button data-fx data-v="admin" class="${state.view === 'admin' ? 'active' : ''}">${icon(isAdmin() ? 'settings' : 'lock', 16)}<span>Admin</span></button>
         </nav>
         <div class="pos-right">
           <button class="lic-chip ${daysLeft !== null && daysLeft <= 30 ? 'warn' : ''}" id="lic-chip" title="License">${icon('key', 14)}<span>${daysLeft !== null && daysLeft <= 30 ? `Renews in ${daysLeft} day${daysLeft === 1 ? '' : 's'}` : licText}</span></button>
           <div class="pos-clock" id="clock"></div>
-          <div class="avatar cashier">CA</div>
+          <div class="avatar cashier" title="${isAdmin() ? 'Admin' : 'Cashier'}">${isAdmin() ? 'AD' : 'CA'}</div>
         </div>
       </header>
       <main id="pos-main"></main>`;
-    $$('.pos-tabs button').forEach(b => b.onclick = () => { state.view = b.dataset.v; frame(); });
+    $$('.pos-tabs button').forEach(b => b.onclick = () => {
+      if (b.dataset.v === 'admin' && !isAdmin()) return askPin(() => { state.view = 'admin'; frame(); });
+      state.view = b.dataset.v; frame();
+    });
     NavFX.attach($('.pos-tabs'), 'pos');
     $('#lic-chip').onclick = showLicense;
     tick(); clearInterval(window.__clock); window.__clock = setInterval(tick, 15000);
-    state.view === 'register' ? register() : salesView();
+    if (state.view === 'register') register();
+    else if (state.view === 'sales') salesView();
+    else PosAdmin.render($('#pos-main'), ctx);
   }
   function tick() { const el = $('#clock'); if (el) el.textContent = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); }
+
+  function askPin(onOk) {
+    let code = '';
+    modal(`
+      <div class="pin">
+        <div class="lock-icon" style="margin-bottom:12px">${icon('lock', 22)}</div>
+        <h2>Admin PIN</h2>
+        <div class="card-sub">Enter the admin PIN to manage this POS.</div>
+        <div class="pin-dots" id="pin-dots">${'<i></i>'.repeat(4)}</div>
+        <div class="pin-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 'C', 0, '⌫'].map(k => `<button type="button" data-k="${k}">${k}</button>`).join('')}</div>
+        <div class="pin-hint">Demo PIN: 1234</div>
+      </div>`, (m, close) => {
+      const dots = () => $$('#pin-dots i', m).forEach((d, i) => d.classList.toggle('on', i < code.length));
+      const press = k => {
+        if (k === 'C') code = ''; else if (k === '⌫') code = code.slice(0, -1); else if (code.length < 4) code += k;
+        dots();
+        if (code.length === 4) {
+          if (code === String(cfg.settings.pin)) { setAdmin(true); close(); toast('Admin unlocked'); onOk(); }
+          else { const d = $('#pin-dots', m); d.classList.add('shake'); setTimeout(() => { d.classList.remove('shake'); code = ''; dots(); }, 450); }
+        }
+      };
+      $$('.pin-pad button', m).forEach(b => b.onclick = () => press(b.dataset.k));
+      const onKey = e => { if (!m.isConnected) return document.removeEventListener('keydown', onKey); if (/^\d$/.test(e.key)) press(e.key); if (e.key === 'Backspace') press('⌫'); if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+    }, 'pin-modal');
+  }
 
   function showLicense() {
     modal(`<h2>License</h2><div class="card-sub">${esc(p.n)}</div>
@@ -199,13 +331,16 @@ function boot(p) {
 
   // ----- register -----
   function register() {
+    const cats = cfg.cats.filter(c => activeItems().some(i => i.cat === c.id));
+    if (state.cat !== 'All' && !cats.some(c => c.id === state.cat)) state.cat = 'All';
+    if (!cfg.types.includes(state.type)) state.type = cfg.types[0];
     $('#pos-main').innerHTML = `
       <div class="pos-grid">
         <section class="pos-menu">
           <div class="pos-tools">
             <label class="search">${icon('search', 15)}<input id="q" placeholder="Search menu…" value="${esc(state.q)}" /></label>
           </div>
-          <div class="cat-row" id="cats">${['All', ...menu.cats].map(c => `<button data-c="${esc(c)}" class="${state.cat === c ? 'active' : ''}">${esc(c)}</button>`).join('')}</div>
+          <div class="cat-row" id="cats">${[{ id: 'All', name: 'All' }, ...cats].map(c => `<button data-c="${esc(c.id)}" class="${state.cat === c.id ? 'active' : ''}">${esc(c.name)}</button>`).join('')}</div>
           <div class="item-grid" id="items"></div>
         </section>
         <aside class="ticket glass ${state.sheet ? 'open' : ''}" id="ticket"></aside>
@@ -219,13 +354,13 @@ function boot(p) {
 
   function drawItems() {
     const q = state.q.toLowerCase();
-    const list = items.filter(i => (state.cat === 'All' || i.cat === state.cat) && (!q || i.name.toLowerCase().includes(q)));
+    const list = activeItems().filter(i => (state.cat === 'All' || i.cat === state.cat) && (!q || i.name.toLowerCase().includes(q)));
     $('#items').innerHTML = list.length ? list.map(i => {
       const inCart = state.cart.find(l => l.id === i.id);
       return `<button class="item glass" data-id="${i.id}">
         ${inCart ? `<span class="item-badge">${inCart.qty}</span>` : ''}
-        <span class="item-e">${i.e}</span><span class="item-n">${esc(i.name)}</span><span class="item-p">${money(i.price)}</span></button>`;
-    }).join('') : `<div class="empty" style="grid-column:1/-1">Nothing matches “${esc(state.q)}”.</div>`;
+        <span class="item-e">${esc(i.e || '🍽️')}</span><span class="item-n">${esc(i.name)}</span><span class="item-p">${money(i.price)}</span></button>`;
+    }).join('') : `<div class="empty" style="grid-column:1/-1">${cfg.items.length ? `Nothing matches “${esc(state.q)}”.` : 'No items yet. Add your menu in Admin → Menu.'}</div>`;
     $$('#items .item').forEach(b => b.onclick = () => {
       add(b.dataset.id);
       b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump');
@@ -233,10 +368,15 @@ function boot(p) {
   }
 
   function add(id) {
-    const it = items.find(i => i.id === id);
+    const it = cfg.items.find(i => i.id === id);
     const l = state.cart.find(x => x.id === id);
-    l ? l.qty++ : state.cart.push({ id, name: it.name, price: it.price, e: it.e, qty: 1 });
+    l ? l.qty++ : state.cart.push({ id, name: it.name, cat: it.cat, price: it.price, e: it.e, qty: 1 });
     drawItems(); drawTicket();
+  }
+
+  function tableOptions() {
+    const zones = [...new Set(cfg.tables.map(t => t.zone))];
+    return `<option value="">Select…</option>` + zones.map(z => `<optgroup label="${esc(z)}">${cfg.tables.filter(t => t.zone === z).map(t => `<option ${state.table === t.name ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
   }
 
   function drawTicket() {
@@ -247,20 +387,20 @@ function boot(p) {
         <div><b>Order #${String(nextTicket()).padStart(4, '0')}</b><span>${new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span></div>
         <button class="btn btn-sm btn-icon btn-ghost sheet-close" id="sheet-close" aria-label="Close">${icon('x', 18)}</button>
       </div>
-      <div class="seg ticket-types" id="otype">${menu.types.map(x => `<button data-t="${x}" class="${state.type === x ? 'active' : ''}">${x}</button>`).join('')}</div>
-      ${needsTable(state.type) ? `<div class="ticket-sub"><label>${icon('table', 15)}Table</label><select class="input" id="table"><option value="">Select…</option>${Array.from({ length: 16 }, (_, i) => `<option ${state.table === 'T' + (i + 1) ? 'selected' : ''}>T${i + 1}</option>`).join('')}</select></div>` : ''}
+      <div class="seg ticket-types" id="otype">${cfg.types.map(x => `<button data-t="${esc(x)}" class="${state.type === x ? 'active' : ''}">${esc(x)}</button>`).join('')}</div>
+      ${needsTable(state.type) && cfg.tables.length ? `<div class="ticket-sub"><label>${icon('table', 15)}Table</label><select class="input" id="table">${tableOptions()}</select></div>` : ''}
       ${needsRoom(state.type) ? `<div class="ticket-sub"><label>${icon('bed', 15)}Room</label><input class="input" id="room" placeholder="e.g. 214" value="${esc(state.room)}" /></div>` : ''}
       <div class="ticket-lines">${state.cart.length ? state.cart.map(l => `
         <div class="tl">
-          <span class="tl-e">${l.e}</span>
+          <span class="tl-e">${esc(l.e || '🍽️')}</span>
           <div class="tl-n"><b>${esc(l.name)}</b><span>${money(l.price)}</span></div>
           <div class="stepper"><button data-dec="${l.id}" aria-label="Less">${icon('minus', 14)}</button><b>${l.qty}</b><button data-inc="${l.id}" aria-label="More">${icon('plus', 14)}</button></div>
           <div class="tl-t">${money(l.price * l.qty)}</div>
         </div>`).join('') : `<div class="ticket-empty">${icon('bag', 28)}<span>Tap items to start an order</span></div>`}</div>
       <div class="ticket-foot">
         <div class="summary-row"><span>Subtotal</span><b>${money(t.sub)}</b></div>
-        <div class="summary-row"><span>VAT 11%</span><b>${money(t.vat)}</b></div>
-        <div class="summary-total"><span>Total</span><div style="text-align:right"><b>${money(t.total)}</b><small class="lbp">${Math.round(t.total * LBP_RATE).toLocaleString('en-US')} LBP</small></div></div>
+        <div class="summary-row"><span>VAT ${cfg.settings.vat}%</span><b>${money(t.vat)}</b></div>
+        <div class="summary-total"><span>Total</span><div style="text-align:right"><b>${money(t.total)}</b><small class="lbp">${Math.round(t.total * (cfg.settings.lbp || LBP_RATE)).toLocaleString('en-US')} LBP</small></div></div>
         <div class="ticket-actions">
           <button class="btn" id="clear" ${state.cart.length ? '' : 'disabled'}>Clear</button>
           <button class="btn btn-primary charge" id="charge" ${state.cart.length ? '' : 'disabled'}>Charge ${money(t.total)}</button>
@@ -281,14 +421,14 @@ function boot(p) {
 
   // ----- payment -----
   function pay() {
-    if (needsTable(state.type) && !state.table) { toast('Choose a table first'); $('#table')?.focus(); return; }
+    if (needsTable(state.type) && cfg.tables.length && !state.table) { toast('Choose a table first'); $('#table')?.focus(); return; }
     if (needsRoom(state.type) && !state.room.trim()) { toast('Enter the room number'); $('#room')?.focus(); return; }
     const t = cartTotals();
     const methods = ['Cash', 'Card', ...(p.t === 'Hotel' ? ['Room charge'] : [])];
     let method = 'Cash';
     modal(`
       <h2>Charge ${money(t.total)}</h2>
-      <div class="card-sub">${state.type}${state.table && needsTable(state.type) ? ' · ' + state.table : ''}${needsRoom(state.type) ? ' · Room ' + esc(state.room) : ''} · ${t.count} item${t.count === 1 ? '' : 's'}</div>
+      <div class="card-sub">${esc(state.type)}${state.table && needsTable(state.type) ? ' · ' + esc(state.table) : ''}${needsRoom(state.type) ? ' · Room ' + esc(state.room) : ''} · ${t.count} item${t.count === 1 ? '' : 's'}</div>
       <div class="pay-methods" id="pm">${methods.map(m => `<button data-m="${m}" class="${m === method ? 'active' : ''}">${icon(m === 'Cash' ? 'cash' : m === 'Card' ? 'card' : 'bed', 22)}<span>${m}</span></button>`).join('')}</div>
       <div id="pm-body"></div>
       <div class="modal-actions"><button class="btn" data-close>Back</button><button class="btn btn-primary" id="complete">${icon('check', 16)}Complete sale</button></div>
@@ -316,12 +456,13 @@ function boot(p) {
         let tender = null;
         if (method === 'Cash') { tender = Number($('#tender', m).value) || 0; if (tender < t.total - 0.001) { toast('Cash received is less than the total'); return; } }
         if (method === 'Room charge') { const r = $('#rc-room', m).value.trim(); if (!r) { toast('Enter the room number'); return; } state.room = r; }
+        const now = new Date();
         const sale = {
-          no: nextTicket(), at: new Date().toISOString(), date: today(), type: state.type,
+          no: nextTicket(), at: now.toISOString(), date: today(), type: state.type,
           table: needsTable(state.type) ? state.table : '', room: (needsRoom(state.type) || method === 'Room charge') ? state.room : '',
-          lines: state.cart.map(l => ({ name: l.name, qty: l.qty, price: l.price })), ...t, method, tender
+          lines: state.cart.map(l => ({ id: l.id, name: l.name, cat: l.cat, qty: l.qty, price: l.price })), ...t, method, tender
         };
-        const all = sales(); all.push(sale); store.set(SALES_KEY, all);
+        saveSales([...salesCache, sale]);
         close();
         state.cart = []; state.table = ''; state.room = ''; state.sheet = false;
         receipt(sale);
@@ -334,22 +475,23 @@ function boot(p) {
     modal(`
       <div class="rcpt">
         <div class="rcpt-ok">${icon('check', 26)}</div>
-        <h2>Sale complete</h2>
-        <div class="card-sub">Order #${String(s.no).padStart(4, '0')} · ${s.method}${s.tender != null ? ` · change ${money(s.tender - s.total)}` : ''}</div>
+        <h2>${!s.demo && Date.now() - new Date(s.at) < 60000 ? 'Sale complete' : 'Receipt'}</h2>
+        <div class="card-sub">Order #${String(s.no).padStart(4, '0')} · ${esc(s.method)}${s.tender != null ? ` · change ${money(s.tender - s.total)}` : ''}</div>
         <div class="paper">
-          <b>${esc(p.n)}</b><span>${new Date(s.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</span>
-          <span>${esc(s.type)}${s.table ? ' · ' + s.table : ''}${s.room ? ' · Room ' + esc(s.room) : ''}</span>
+          <b>${esc(cfg.settings.name || p.n)}</b><span>${new Date(s.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+          <span>${esc(s.type)}${s.table ? ' · ' + esc(s.table) : ''}${s.room ? ' · Room ' + esc(s.room) : ''}</span>
           <hr/>${s.lines.map(l => `<div><span>${l.qty} × ${esc(l.name)}</span><span>${money(l.qty * l.price)}</span></div>`).join('')}<hr/>
-          <div><span>Subtotal</span><span>${money(s.sub)}</span></div><div><span>VAT 11%</span><span>${money(s.vat)}</span></div>
+          <div><span>Subtotal</span><span>${money(s.sub)}</span></div><div><span>VAT</span><span>${money(s.vat)}</span></div>
           <div class="paper-total"><span>Total</span><span>${money(s.total)}</span></div>
+          ${cfg.settings.footer ? `<hr/><span>${esc(cfg.settings.footer)}</span>` : ''}
         </div>
       </div>
-      <div class="modal-actions" style="justify-content:center"><button class="btn btn-primary" data-close>${icon('plus', 16)}New order</button></div>`, null, 'rcpt-modal');
+      <div class="modal-actions" style="justify-content:center"><button class="btn btn-primary" data-close>${state.view === 'register' ? icon('plus', 16) + 'New order' : 'Close'}</button></div>`, null, 'rcpt-modal');
   }
 
-  // ----- sales today -----
+  // ----- today (cashier view) -----
   function salesView() {
-    const list = sales().filter(s => s.date === today()).reverse();
+    const list = salesCache.filter(s => s.date === today()).reverse();
     const total = list.reduce((s, x) => s + x.total, 0);
     const counts = {};
     list.forEach(s => s.lines.forEach(l => counts[l.name] = (counts[l.name] || 0) + l.qty));
@@ -371,7 +513,7 @@ function boot(p) {
             <tbody>${list.map(s => `<tr class="clickable" data-no="${s.no}">
               <td><span class="mono">#${String(s.no).padStart(4, '0')}</span></td>
               <td class="muted">${new Date(s.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</td>
-              <td>${esc(s.type)}${s.table ? ` <span class="tag">${s.table}</span>` : ''}${s.room ? ` <span class="tag">Room ${esc(s.room)}</span>` : ''}</td>
+              <td>${esc(s.type)}${s.table ? ` <span class="tag">${esc(s.table)}</span>` : ''}${s.room ? ` <span class="tag">Room ${esc(s.room)}</span>` : ''}</td>
               <td class="muted">${s.count} item${s.count === 1 ? '' : 's'}</td>
               <td><span class="tag">${esc(s.method)}</span></td>
               <td class="num"><b>${money(s.total)}</b></td></tr>`).join('')}</tbody></table></div>`
@@ -383,3 +525,7 @@ function boot(p) {
 
   frame();
 }
+
+// start
+if (lock) renderLock(P, lock);
+else boot(P);

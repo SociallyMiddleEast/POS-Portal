@@ -4,7 +4,7 @@
 // the UI only talks to Store, so nothing else needs to change.
 // ------------------------------------------------------------------
 
-const STORE_KEY = 'pos-portal-data-v3';
+const STORE_KEY = 'pos-portal-data-v4';
 const VAT_RATE = 0.11; // Lebanon VAT
 
 const PRODUCTS = [
@@ -44,10 +44,12 @@ function addPeriod(dateStr, billing) {
   if (billing === 'Monthly') d.setMonth(d.getMonth() + 1); else d.setFullYear(d.getFullYear() + 1);
   return isoLocal(d);
 }
-function newToken() {
+// seeded(): deterministic (same demo links on every device); otherwise crypto-random.
+function newToken(seeded) {
   const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
   let t = '';
-  const rnd = (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(new Uint32Array(14)) : Array.from({ length: 14 }, () => Math.random() * 1e9);
+  const rnd = seeded ? Array.from({ length: 14 }, () => Math.floor(seeded() * 1e9))
+    : (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(new Uint32Array(14)) : Array.from({ length: 14 }, () => Math.random() * 1e9);
   for (let i = 0; i < 14; i++) t += abc[rnd[i] % abc.length];
   return t;
 }
@@ -160,7 +162,7 @@ function seedData() {
     if (!paid) return;
     const { model, billing } = paid.license;
     const start = paid.payment.date;
-    c.access = { token: newToken(), orderId: paid.id, model, billing: model === 'Perpetual' ? null : billing, start, end: model === 'Perpetual' ? null : addPeriod(start, billing), revoked: false };
+    c.access = { token: newToken(rnd), orderId: paid.id, model, billing: model === 'Perpetual' ? null : billing, start, end: model === 'Perpetual' ? null : addPeriod(start, billing), revoked: false };
   });
   // One lapsed monthly subscription, to show the "expired" state
   const lapsed = customers.find(c => c.id === 'C005');
@@ -176,6 +178,28 @@ function seedData() {
   return { customers, contacts, orders, devices, notes };
 }
 
+// Demo account built from a real casual-dining menu in Baghdad (brand name removed).
+// Added to existing data too, so it appears without resetting the portal.
+function ensureDemoCustomer(data) {
+  if (data.customers.some(c => c.id === 'C011')) return false;
+  const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return isoLocal(d); };
+  const c = { id: 'C011', name: 'Demo Restaurant', type: 'Restaurant', city: 'Baghdad', address: '', phone: '+964 770 000 0000', email: 'demo@restaurant-demo.iq', status: 'Active', plan: 'Pro', outlets: 1, since: day(-21), menu: 'iq-casual', demo: true };
+  const max = data.orders.reduce((m, o) => Math.max(m, parseInt(o.id.split('-')[2], 10)), 0);
+  const P = sku => PRODUCTS.find(x => x.sku === sku);
+  const lines = [['LIC-PRO', 3], ['LIC-KDS', 1], ['HW-TERM', 2], ['HW-HAND', 2], ['HW-PRNT', 2], ['HW-KPRN', 1], ['HW-KDS', 1], ['HW-DRWR', 1], ['SRV-INST', 1], ['SRV-MENU', 1], ['SRV-TRN', 2]]
+    .map(([sku, qty]) => ({ sku, name: P(sku).name, qty, price: licensePrice(P(sku), 'Subscription', 'Yearly'), discount: sku.startsWith('HW') ? 5 : 0 }));
+  const order = { id: `SO-${new Date().getFullYear()}-${String(max + 1).padStart(4, '0')}`, customerId: c.id, date: day(-18), status: 'Paid', terms: 'Net 15', lines,
+    license: { model: 'Subscription', billing: 'Yearly' }, payment: { date: day(-14), method: 'Bank transfer', reference: 'DEMO-0001' }, notes: 'Demo setup: menu imported from the venue\'s online menu.' };
+  c.access = { token: 'demo7k2q9baghd', orderId: order.id, model: 'Subscription', billing: 'Yearly', start: order.payment.date, end: addPeriod(order.payment.date, 'Yearly'), revoked: false };
+  data.customers.push(c);
+  data.orders.push(order);
+  data.contacts.push({ id: 'P9001', customerId: c.id, name: 'Demo Manager', role: 'General Manager', phone: '+964 770 000 0001', email: 'manager@restaurant-demo.iq', primary: true });
+  [['POS Terminal', 'Cashier'], ['POS Terminal', 'Terrace'], ['Handheld', 'Floor'], ['Handheld', 'Floor'], ['Receipt Printer', 'Cashier'], ['Kitchen Display', 'Kitchen']]
+    .forEach(([type, location], i) => data.devices.push({ customerId: c.id, type, serial: `TX-11${i}${4200 + i * 37}`, location, status: 'Online' }));
+  data.notes.push({ customerId: c.id, date: day(-20), text: 'Demo account. Menu (Breakfast, Soups, Saj) imported with IQD prices; Desserts, Drinks and Hookah to be filled by the venue.' });
+  return true;
+}
+
 const Store = {
   _data: null,
   load() {
@@ -183,10 +207,11 @@ const Store = {
       const raw = localStorage.getItem(STORE_KEY);
       this._data = raw ? JSON.parse(raw) : seedData();
     } catch (e) { this._data = seedData(); }
+    if (ensureDemoCustomer(this._data)) this.save();
     return this._data;
   },
   save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(this._data)); } catch (e) { /* storage unavailable */ } },
-  reset() { try { localStorage.removeItem(STORE_KEY); } catch (e) {} this._data = seedData(); },
+  reset() { try { localStorage.removeItem(STORE_KEY); } catch (e) {} this._data = seedData(); ensureDemoCustomer(this._data); },
   get data() { return this._data || this.load(); },
 
   customers() { return this.data.customers; },

@@ -65,7 +65,7 @@ function customerStats(id) {
 function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function accessLink(c) {
   const a = c.access;
-  const payload = { v: 1, k: a.token, i: c.id, n: c.name, t: c.type, c: c.city, o: c.outlets, m: a.model, b: a.billing, s: a.start, e: a.end };
+  const payload = { v: 1, k: a.token, i: c.id, n: c.name, t: c.type, c: c.city, o: c.outlets, m: a.model, b: a.billing, s: a.start, e: a.end, ...(c.menu ? { mk: c.menu } : {}) };
   const base = new URL('client.html', location.href).href.split('#')[0];
   return base + '#' + b64url(JSON.stringify(payload));
 }

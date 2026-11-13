@@ -84,7 +84,7 @@ const PosAdmin = (() => {
   }
 
   // ---------- small UI helpers ----------
-  const m = (n, d = 0) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const m = (n, d = 0) => money(n, CUR.dec === 0 ? 0 : d);
   const pct = (a, b) => b ? Math.round((a - b) / b * 100) : (a ? 100 : 0);
   const delta = (a, b) => { const v = pct(a, b); return `<div class="stat-change ${v < 0 ? 'down' : ''}">${icon('arrowUpRight', 14)}${v >= 0 ? '+' : ''}${v}%<span>vs previous ${range().n === 1 ? 'day' : range().n + ' days'}</span></div>`; };
   const stat = (label, value, ic, foot) => `<div class="glass stat"><div class="stat-top"><span>${label}</span><div class="stat-icon">${icon(ic, 17)}</div></div><div class="stat-value">${value}</div>${foot}</div>`;
@@ -196,8 +196,8 @@ const PosAdmin = (() => {
         ${stat('Items sold', a.qty.toLocaleString(), 'star', delta(a.qty, b.qty))}
       </div>
       <div class="grid row-2-1">
-        <div class="glass card"><div class="card-head"><div><div class="card-title">${r.n === 1 ? 'Sales by hour' : 'Sales by day'}</div><div class="card-sub">Revenue incl. VAT · ${r.label}</div></div></div><div class="chart-wrap" id="ch-days"></div></div>
-        <div class="glass card"><div class="card-head"><div><div class="card-title">By category</div><div class="card-sub">Net sales (excl. VAT)</div></div></div>${hbars(a.byCat)}</div>
+        <div class="glass card"><div class="card-head"><div><div class="card-title">${r.n === 1 ? 'Sales by hour' : 'Sales by day'}</div><div class="card-sub">Revenue${Number(C.cfg.settings.vat) ? ' incl. VAT' : ''} · ${r.label}</div></div></div><div class="chart-wrap" id="ch-days"></div></div>
+        <div class="glass card"><div class="card-head"><div><div class="card-title">By category</div><div class="card-sub">${Number(C.cfg.settings.vat) ? 'Net sales (excl. VAT)' : 'Sales'}</div></div></div>${hbars(a.byCat)}</div>
       </div>
       <div class="grid row-1-1" style="margin-bottom:18px">
         <div class="glass card"><div class="card-head"><div><div class="card-title">Best sellers</div><div class="card-sub">Top 5 by quantity</div></div><button class="btn btn-sm btn-ghost" data-goto="items">All items</button></div>
@@ -392,7 +392,7 @@ const PosAdmin = (() => {
       $('#m-items').innerHTML = list.length ? `<div class="table-wrap"><table style="min-width:520px">
         <thead><tr><th>Item</th><th>Category</th><th class="num">Price</th><th>On register</th><th></th></tr></thead>
         <tbody>${list.map(i => `<tr>
-          <td><div class="cell-main"><span class="rank-e">${C.esc(i.e || '🍽️')}</span><b>${C.esc(i.name)}</b></div></td>
+          <td><div class="cell-main"><span class="rank-e">${C.esc(i.e || '🍽️')}</span><div><b>${C.esc(i.name)}</b>${i.ar ? `<small dir="rtl">${C.esc(i.ar)}</small>` : ''}</div></div></td>
           <td class="muted">${C.esc(C.catName(i.cat))}</td>
           <td class="num"><b>${m(i.price, 2)}</b></td>
           <td><label class="switch"><input type="checkbox" data-tog="${i.id}" ${i.active !== false ? 'checked' : ''}/><span></span></label></td>
@@ -446,8 +446,9 @@ const PosAdmin = (() => {
     C.modal(`<h2>${it ? 'Edit item' : 'New item'}</h2><div class="card-sub">${it ? 'Changes apply to new orders. Past sales keep their price.' : 'Add a product to the register.'}</div>
       <form id="itf"><div class="form-grid">
         <div class="field full"><label>Name</label><input class="input" name="name" required value="${C.esc(it?.name || '')}" placeholder="e.g. Chicken Shawarma" /></div>
-        <div class="field"><label>Price (USD, excl. VAT)</label><input class="input" name="price" type="number" step="0.25" min="0" required value="${it ? it.price : ''}" /></div>
+        <div class="field"><label>Price (${CUR.code}${Number(cfg.settings.vat) ? ', excl. VAT' : ''})</label><input class="input" name="price" type="number" step="${CUR.dec === 0 ? 250 : 0.25}" min="0" required value="${it ? it.price : ''}" /></div>
         <div class="field"><label>Category</label><select class="input" name="cat">${cfg.cats.map(c => `<option value="${c.id}" ${(it ? it.cat : S.menu.cat) === c.id ? 'selected' : ''}>${C.esc(c.name)}</option>`).join('')}</select></div>
+        <div class="field full"><label>Second-language name (optional)</label><input class="input" name="ar" dir="auto" value="${C.esc(it?.ar || '')}" placeholder="e.g. Arabic name" /></div>
         <div class="field full"><label>Icon</label><div class="emoji-row"><input class="input emoji-in" name="e" maxlength="4" value="${C.esc(emoji)}" />${EMOJI.map(x => `<button type="button" class="emo ${x === emoji ? 'sel' : ''}" data-e="${x}">${x}</button>`).join('')}</div></div>
         <label class="check full"><input type="checkbox" name="active" ${it?.active === false ? '' : 'checked'} /> Show on the register</label>
       </div>
@@ -456,7 +457,7 @@ const PosAdmin = (() => {
       $$('.emo', md).forEach(b => b.onclick = () => { f.elements.e.value = b.dataset.e; $$('.emo', md).forEach(x => x.classList.toggle('sel', x === b)); });
       f.onsubmit = e => {
         e.preventDefault();
-        const v = { name: f.elements.name.value.trim(), price: Math.max(0, Number(f.elements.price.value) || 0), cat: f.elements.cat.value, e: f.elements.e.value.trim() || '🍽️', active: f.elements.active.checked };
+        const v = { ar: f.elements.ar.value.trim(), name: f.elements.name.value.trim(), price: Math.max(0, Number(f.elements.price.value) || 0), cat: f.elements.cat.value, e: f.elements.e.value.trim() || '🍽️', active: f.elements.active.checked };
         if (!v.name) return;
         if (it) Object.assign(it, v); else cfg.items.push({ id: 'i' + Date.now().toString(36), ...v });
         C.saveCfg(); close(); C.toast(it ? 'Item updated' : 'Item added'); draw();
@@ -559,7 +560,7 @@ const PosAdmin = (() => {
           <div class="form-grid" style="grid-template-columns:1fr 1fr">
             <div class="field" style="grid-column:1/-1"><label>Name on POS & receipts</label><input class="input" name="name" value="${C.esc(st.name || C.p.n)}" required /></div>
             <div class="field"><label>VAT %</label><input class="input" name="vat" type="number" min="0" max="50" step="0.5" value="${st.vat}" /></div>
-            <div class="field"><label>LBP rate (per $1)</label><input class="input" name="lbp" type="number" min="1" step="100" value="${st.lbp}" /></div>
+            ${CUR.code === 'USD' ? `<div class="field"><label>LBP rate (per $1)</label><input class="input" name="lbp" type="number" min="0" step="100" value="${st.lbp}" /></div>` : `<div class="field"><label>Currency</label><input class="input" value="${CUR.code}" disabled /></div>`}
             <div class="field" style="grid-column:1/-1"><label>Receipt footer</label><input class="input" name="footer" value="${C.esc(st.footer || '')}" placeholder="Thank you for your visit!" /></div>
             <div class="field" style="grid-column:1/-1"><label>Order types (comma separated)</label><input class="input" name="types" value="${C.esc(C.cfg.types.join(', '))}" /></div>
           </div>
@@ -589,7 +590,7 @@ const PosAdmin = (() => {
     $('#sf').onsubmit = e => {
       e.preventDefault();
       const el = e.target.elements;
-      Object.assign(st, { name: el.name.value.trim() || C.p.n, vat: Math.max(0, +el.vat.value || 0), lbp: Math.max(1, +el.lbp.value || 1), footer: el.footer.value.trim() });
+      Object.assign(st, { name: el.name.value.trim() || C.p.n, vat: Math.max(0, +el.vat.value || 0), lbp: el.lbp ? Math.max(0, +el.lbp.value || 0) : st.lbp, footer: el.footer.value.trim() });
       const types = el.types.value.split(',').map(x => x.trim()).filter(Boolean);
       if (types.length) C.cfg.types = [...new Set(types)];
       C.saveCfg(); C.toast('Settings saved'); C.rerender();

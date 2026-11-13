@@ -10,7 +10,9 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = n => '$' + Number(n).toFixed(2);
+// Currency of the business (set from its settings on boot)
+const CUR = { code: 'USD', sym: '$', dec: 2, suffix: false };
+const money = (n, dec) => { const d = dec ?? CUR.dec; const s = Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); return CUR.suffix ? `${s} ${CUR.sym}` : CUR.sym + s; };
 const VAT = 0.11;
 const LBP_RATE = 89500;
 const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
@@ -53,7 +55,7 @@ function decodeLink() {
 function lockReason(p) {
   if (!p) return { title: 'Invalid link', text: 'This access link is incomplete or damaged. Ask your provider for a new link.' };
   // Same browser as the sales portal (demo): honour revoke / new link / suspension.
-  const portal = store.get('pos-portal-data-v3', null);
+  const portal = store.get('pos-portal-data-v4', null);
   const c = portal && portal.customers && portal.customers.find(x => x.id === p.i);
   if (c) {
     if (!c.access || c.access.token !== p.k) return { title: 'Link replaced', text: 'This link is no longer valid. A newer link was issued. Ask your provider for it.' };
@@ -124,6 +126,38 @@ const MENUS = {
   }
 };
 
+// ---------- customer-specific menu templates ----------
+// 'iq-casual': casual dining, Baghdad. Items & IQD prices taken from the venue's
+// public online menu (brand name removed). Desserts / Drinks / Hookah had no items
+// published, so they start empty for the venue to fill in from Admin → Menu.
+const TEMPLATES = {
+  'iq-casual': {
+    currency: { code: 'IQD', sym: 'IQD', dec: 0, suffix: true },
+    vat: 0, types: ['Dine-in'], base: 75,
+    tables: [['Indoor', 'T', 12, 4], ['Family section', 'F', 6, 6], ['Terrace', 'O', 8, 4]],
+    hours: [[8, 6], [9, 9], [10, 9], [11, 6], [12, 3], [13, 3], [14, 3], [15, 2], [16, 2], [17, 3], [18, 4], [19, 5], [20, 6], [21, 6], [22, 4], [23, 2]],
+    cats: [
+      ['Breakfast', [
+        ['House Breakfast (for 2)', 'فطور الدار (لشخصين)', 28000, '🍳'], ['Grilled Halloumi', 'جبنة حلوم مشوي', 9000, '🧀'], ['Falafel', 'فلافل', 8000, '🧆'],
+        ['Mshaltat Pie with Qaymar', 'فطير مشلتت مع قيمر', 9000, '🥐'], ['House Special Breakfast', 'فطور الدار سبيشل', 38000, '🍽️'], ['Foul Medames', 'فول مدمس', 8000, '🫘'],
+        ['Balila', 'بليلة', 8000, '🫘'], ['Labneh', 'لبنة', 6000, '🥛'], ['Hummus Fatteh', 'فتة حمص', 8000, '🥣'], ['Meat Omelette', 'اومليت لحم', 12500, '🍳'],
+        ['Meat Omelette with Pine Nuts', 'اومليت لحم بالصنوبر', 15000, '🍳'], ['Fried Eggs / Omelette', 'بيض مقلي اومليت', 7500, '🍳'], ['Eggs with Cheese', 'بيض مع جبنة', 9000, '🍳'],
+        ['Eggs with Pine Nuts', 'بيض وصنوبر', 10500, '🍳'], ['Eggs with Tomato', 'بيض وطماطة', 8500, '🍅']]],
+      ['Soups', [['House Soup', 'شوربة الدار', 5000, '🍲'], ['Lentil Soup', 'شوربة العدس', 4000, '🍲'], ['Vegetable Soup', 'شوربة الخضار', 5000, '🥕']]],
+      ['Saj', [
+        ['Cheese & Turkey Manousheh', 'مناقيش جبن وحبش', 8000, '🫓'], ['Kofta Special Manousheh', 'مناقيش كفته سبيشل', 10000, '🥙'], ['Labneh & Kishk Manousheh', 'مناقيش لبنة كشك', 8000, '🫓'],
+        ['Lebanese Zaatar Manousheh', 'مناقيش زعتر لبناني', 4500, '🌿'], ['Jordanian Zaatar Manousheh', 'مناقيش زعتر اردني', 5000, '🌿'], ['Cheese Manousheh', 'مناقيش بالجبن', 6500, '🧀'],
+        ['Feta Cheese Manousheh', 'مناقيش جبنة فيتا', 8000, '🧀'], ['Manousheh Combo', 'كومبو مناقيش', 9000, '🫓'], ['Cheese, Parsley & Onion Manousheh', 'مناقيش بالجبن مع بقدونس وبصل', 10000, '🧅'],
+        ['Scrambi', 'سكرمبي', 9000, '🥚'], ['Lebanese Kaak', 'كعكة لبنانية', 6000, '🥯'], ['Kofta & Cheese Manousheh', 'مناقيش كفته وجبن', 11000, '🥙'],
+        ['House Kofta Manousheh', 'مناقيش كفته الدار', 12000, '🥙'], ['Patriot (Small)', 'باتريوت صغير', 22000, '🍕'], ['Armenian Zaatar Manousheh', 'مناقيش زعتر ارمني', 5000, '🌿'],
+        ['Aleppo Zaatar Manousheh', 'مناقيش بالزعتر الحلبي', 5000, '🌿'], ['Spicy Cheese Manousheh', 'مناقيش جبن حار', 7000, '🌶️'], ['House Special Manousheh', 'منقوشة الدار سبيشل', 8500, '🫓'],
+        ['Signature Manousheh', 'منقوشة مميزة', 9000, '⭐'], ['Lebanese Kaak Combo', 'كعكة لبنانية كومبو', 10000, '🥯'], ['Egyptian Hawawshi', 'حواوشي مصري', 10000, '🥙'],
+        ['Lebanese Lahm Bi Ajeen', 'لحم بعجين لبناني', 10000, '🥩'], ['Armenian Lahm Bi Ajeen', 'لحم بعجين ارمني', 11000, '🥩'], ['Patriot (Large)', 'باتريوت', 30000, '🍕']]],
+      ['Desserts', []], ['Drinks', []], ['Hookah', []]
+    ]
+  }
+};
+
 // ---------- app ----------
 const P = decodeLink();
 const lock = lockReason(P);
@@ -155,6 +189,15 @@ const TABLE_LAYOUTS = {
   Hotel: [['Restaurant', 'R', 10, 4], ['Pool bar', 'PB', 6, 2]]
 };
 function seedConfig(p) {
+  const tpl = TEMPLATES[p.mk];
+  if (tpl) {
+    const cats = tpl.cats.map(([name], i) => ({ id: 'c' + i, name }));
+    const items = [];
+    tpl.cats.forEach(([, list], ci) => list.forEach(([name, ar, price, e]) => items.push({ id: 'i' + items.length, name, ar, price, cat: 'c' + ci, e, active: true })));
+    const tables = [];
+    tpl.tables.forEach(([zone, pre, n, seats]) => { for (let k = 1; k <= n; k++) tables.push({ id: 'tb' + tables.length, name: pre + k, zone, seats }); });
+    return { v: 1, cats, items, tables, types: tpl.types, settings: { name: p.n, vat: tpl.vat, lbp: 0, currency: tpl.currency, pin: '1234', footer: 'Thank you for your visit!' } };
+  }
   const menu = MENUS[p.t] || MENUS.Restaurant;
   const cats = menu.cats.map((name, i) => ({ id: 'c' + i, name }));
   const items = menu.items.map(([name, price, cat, e], i) => ({ id: 'i' + i, name, price, cat: cats.find(c => c.name === cat).id, e, active: true }));
@@ -171,21 +214,24 @@ function seedSales(p, cfg, days = 45) {
   const rnd = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
   // popularity: a few stars, a long tail, one item that never sells
   const weights = cfg.items.map((it, i) => {
+    if (it.active === false) return 0;
     if (i === cfg.items.length - 2) return 0;          // never sold
     const r = rnd();
     return r > 0.82 ? 6 + rnd() * 6 : r > 0.25 ? 1 + rnd() * 3 : 0.08 + rnd() * 0.3;
   });
   const wsum = weights.reduce((a, b) => a + b, 0);
   const pickItem = () => { let x = rnd() * wsum; for (let i = 0; i < weights.length; i++) { x -= weights[i]; if (x <= 0) return cfg.items[i]; } return cfg.items[0]; };
-  const HOURS = {
+  let HOURS = {
     Café: [[7, 3], [8, 6], [9, 7], [10, 5], [11, 4], [12, 4], [13, 3], [14, 3], [15, 3], [16, 4], [17, 3], [18, 2], [19, 1]],
     Bakery: [[6, 4], [7, 8], [8, 9], [9, 7], [10, 5], [11, 4], [12, 4], [13, 3], [14, 2], [15, 2], [16, 2], [17, 3], [18, 2]],
     Bar: [[17, 2], [18, 4], [19, 5], [20, 7], [21, 9], [22, 10], [23, 8], [0, 5], [1, 2]],
     def: [[11, 1], [12, 4], [13, 7], [14, 6], [15, 3], [16, 1], [17, 1], [18, 2], [19, 5], [20, 8], [21, 7], [22, 4], [23, 1]]
   }[p.t] || [[7, 3], [8, 4], [9, 3], [12, 4], [13, 6], [14, 4], [19, 4], [20, 6], [21, 5], [22, 3]];
+  const tpl = TEMPLATES[p.mk];
+  if (tpl && tpl.hours) HOURS.splice(0, HOURS.length, ...tpl.hours);
   const hsum = HOURS.reduce((a, h) => a + h[1], 0);
   const pickHour = () => { let x = rnd() * hsum; for (const [h, w] of HOURS) { x -= w; if (x <= 0) return h; } return HOURS[0][0]; };
-  const base = { Restaurant: 34, Café: 55, Bar: 40, Bakery: 70, Hotel: 38 }[p.t] || 34;
+  const base = (tpl && tpl.base) || { Restaurant: 34, Café: 55, Bar: 40, Bakery: 70, Hotel: 38 }[p.t] || 34;
   const vat = cfg.settings.vat / 100;
   const now = new Date();
   const out = [];
@@ -233,6 +279,7 @@ function boot(p) {
   if (!salesCache) { salesCache = seedSales(p, cfg); store.set(SALES_KEY, salesCache); }
 
   document.title = `${cfg.settings.name || p.n} · POS`;
+  Object.assign(CUR, { code: 'USD', sym: '$', dec: 2, suffix: false }, cfg.settings.currency || {});
   const state = { view: 'register', cat: 'All', q: '', type: cfg.types[0], table: '', room: '', cart: [], sheet: false };
 
   const vatRate = () => (Number(cfg.settings.vat) || 0) / 100;
@@ -359,7 +406,7 @@ function boot(p) {
       const inCart = state.cart.find(l => l.id === i.id);
       return `<button class="item glass" data-id="${i.id}">
         ${inCart ? `<span class="item-badge">${inCart.qty}</span>` : ''}
-        <span class="item-e">${esc(i.e || '🍽️')}</span><span class="item-n">${esc(i.name)}</span><span class="item-p">${money(i.price)}</span></button>`;
+        <span class="item-e">${esc(i.e || '🍽️')}</span><span class="item-n">${esc(i.name)}</span>${i.ar ? `<span class="item-ar" dir="rtl">${esc(i.ar)}</span>` : ''}<span class="item-p">${money(i.price)}</span></button>`;
     }).join('') : `<div class="empty" style="grid-column:1/-1">${cfg.items.length ? `Nothing matches “${esc(state.q)}”.` : 'No items yet. Add your menu in Admin → Menu.'}</div>`;
     $$('#items .item').forEach(b => b.onclick = () => {
       add(b.dataset.id);
@@ -399,8 +446,8 @@ function boot(p) {
         </div>`).join('') : `<div class="ticket-empty">${icon('bag', 28)}<span>Tap items to start an order</span></div>`}</div>
       <div class="ticket-foot">
         <div class="summary-row"><span>Subtotal</span><b>${money(t.sub)}</b></div>
-        <div class="summary-row"><span>VAT ${cfg.settings.vat}%</span><b>${money(t.vat)}</b></div>
-        <div class="summary-total"><span>Total</span><div style="text-align:right"><b>${money(t.total)}</b><small class="lbp">${Math.round(t.total * (cfg.settings.lbp || LBP_RATE)).toLocaleString('en-US')} LBP</small></div></div>
+        ${Number(cfg.settings.vat) ? `<div class="summary-row"><span>VAT ${cfg.settings.vat}%</span><b>${money(t.vat)}</b></div>` : ''}
+        <div class="summary-total"><span>Total</span><div style="text-align:right"><b>${money(t.total)}</b>${CUR.code === 'USD' && Number(cfg.settings.lbp) ? `<small class="lbp">${Math.round(t.total * cfg.settings.lbp).toLocaleString('en-US')} LBP</small>` : ''}</div></div>
         <div class="ticket-actions">
           <button class="btn" id="clear" ${state.cart.length ? '' : 'disabled'}>Clear</button>
           <button class="btn btn-primary charge" id="charge" ${state.cart.length ? '' : 'disabled'}>Charge ${money(t.total)}</button>
@@ -436,9 +483,10 @@ function boot(p) {
       const body = () => {
         $$('#pm button', m).forEach(b => b.classList.toggle('active', b.dataset.m === method));
         if (method === 'Cash') {
-          const quick = [...new Set([Math.ceil(t.total), Math.ceil(t.total / 10) * 10, Math.ceil(t.total / 20) * 20, Math.ceil(t.total / 50) * 50, 100])].filter(v => v >= t.total).slice(0, 4);
-          $('#pm-body', m).innerHTML = `<div class="field"><label>Cash received (USD)</label><input class="input" id="tender" type="number" step="0.5" min="0" value="${quick[0]}" /></div>
-            <div class="quick">${quick.map(v => `<button class="btn btn-sm" data-q="${v}">$${v}</button>`).join('')}</div>
+          const steps = CUR.dec === 0 ? [250, 5000, 10000, 25000, 50000, 100000] : [1, 10, 20, 50, 100];
+          const quick = [...new Set(steps.map(st => Math.ceil(t.total / st) * st))].filter(v => v >= t.total).slice(0, 4);
+          $('#pm-body', m).innerHTML = `<div class="field"><label>Cash received (${CUR.code})</label><input class="input" id="tender" type="number" step="${CUR.dec === 0 ? 250 : 0.5}" min="0" value="${quick[0]}" /></div>
+            <div class="quick">${quick.map(v => `<button class="btn btn-sm" data-q="${v}">${money(v, 0)}</button>`).join('')}</div>
             <div class="change">Change <b id="chg"></b></div>`;
           const upd = () => { const v = Number($('#tender', m).value) || 0; const ch = v - t.total; $('#chg', m).textContent = ch >= 0 ? money(ch) : 'Not enough'; $('#chg', m).style.color = ch >= 0 ? 'var(--green)' : 'var(--red)'; };
           $('#tender', m).oninput = upd;
@@ -481,7 +529,7 @@ function boot(p) {
           <b>${esc(cfg.settings.name || p.n)}</b><span>${new Date(s.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</span>
           <span>${esc(s.type)}${s.table ? ' · ' + esc(s.table) : ''}${s.room ? ' · Room ' + esc(s.room) : ''}</span>
           <hr/>${s.lines.map(l => `<div><span>${l.qty} × ${esc(l.name)}</span><span>${money(l.qty * l.price)}</span></div>`).join('')}<hr/>
-          <div><span>Subtotal</span><span>${money(s.sub)}</span></div><div><span>VAT</span><span>${money(s.vat)}</span></div>
+          ${s.vat ? `<div><span>Subtotal</span><span>${money(s.sub)}</span></div><div><span>VAT</span><span>${money(s.vat)}</span></div>` : ''}
           <div class="paper-total"><span>Total</span><span>${money(s.total)}</span></div>
           ${cfg.settings.footer ? `<hr/><span>${esc(cfg.settings.footer)}</span>` : ''}
         </div>
